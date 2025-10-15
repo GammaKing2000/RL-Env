@@ -1,0 +1,118 @@
+
+from ursina import *
+from ursina import application
+
+class PlantOS3DViewer:
+    """
+    Manages the 3D visualization of the PlantOS environment using Ursina.
+    """
+    def __init__(self, grid_size: int, cell_size: int = 1):
+        """
+        Initializes the 3D viewer.
+        Note: The Ursina app is a singleton; it can only be initialized once.
+        """
+        self.grid_size = grid_size
+        self.cell_size = cell_size
+        self.app = Ursina(title='PlantOS 3D View', borderless=False, development_mode=True)
+        
+        # Scene entities
+        self.ground = None
+        self.rover_entity = None
+        self.plant_entities = {}  # Maps (x, y) -> Ursina Entity
+        self.obstacle_entities = {} # Maps (x, y) -> Ursina Entity
+
+        # Setup camera and lighting
+        AmbientLight(color=color.rgba(1, 1, 1, 0.5))
+        DirectionalLight(color=color.rgba(1, 1, 1, 0.7), direction=(-1, -1, 1))
+
+    def setup_scene(self, obstacles: set, plants: dict, rover_pos: tuple):
+        """
+        Creates the initial 3D scene with static and dynamic objects.
+        """
+        # Create the ground plane
+        self.ground = Entity(
+            model='plane',
+            scale=(self.grid_size * self.cell_size, 1, self.grid_size * self.cell_size),
+            color=color.hex('#8B4513'), # SaddleBrown
+            texture='white_cube',
+            texture_scale=(self.grid_size, self.grid_size)
+        )
+
+        # Create obstacles
+        for obs_pos in obstacles:
+            x, y = obs_pos
+            self.obstacle_entities[obs_pos] = Entity(
+                model='cube',
+                color=color.gray,
+                position=self._grid_to_world(x, y, 0.5),
+                scale=(self.cell_size, self.cell_size, self.cell_size)
+            )
+        
+        # Create initial plants and rover
+        self.update_scene(plants, rover_pos)
+
+    def update_scene(self, plants: dict, rover_pos: tuple):
+        """
+        Updates the 3D scene to reflect the current state of the environment.
+        """
+        # Update rover
+        if self.rover_entity is None:
+            self.rover_entity = Entity(model='sphere', color=color.blue, scale=self.cell_size * 0.8)
+        self.rover_entity.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.4)
+
+        # Make camera follow the rover
+        camera.position = self.rover_entity.position + (0, self.grid_size * 1.0, -self.grid_size * 0.9)
+        camera.look_at(self.rover_entity)
+
+        # Update plants
+        current_plant_positions = set(self.plant_entities.keys())
+        target_plant_positions = set(plants.keys())
+
+        # Remove plants that no longer exist (e.g. after a reset)
+        for pos in current_plant_positions - target_plant_positions:
+            destroy(self.plant_entities.pop(pos))
+
+        # Add new plants or update existing ones
+        for pos, is_thirsty in plants.items():
+            if pos not in self.plant_entities:
+                self.plant_entities[pos] = Entity(model='cube', scale=self.cell_size * 0.5)
+            
+            entity = self.plant_entities[pos]
+            entity.position = self._grid_to_world(pos[0], pos[1], 0.25)
+            entity.color = color.brown if is_thirsty else color.green
+
+    def reset_scene(self):
+        """Destroys all entities to prepare for a new scene."""
+        for entity in self.obstacle_entities.values():
+            destroy(entity)
+        self.obstacle_entities.clear()
+
+        for entity in self.plant_entities.values():
+            destroy(entity)
+        self.plant_entities.clear()
+
+        if self.rover_entity:
+            destroy(self.rover_entity)
+            self.rover_entity = None
+
+    def render_step(self):
+        """
+        Renders a single frame of the 3D view.
+        This should be called in the main application loop.
+        """
+        self.app.step()
+
+    def _grid_to_world(self, grid_x, grid_y, height):
+        """
+        Converts grid coordinates to world coordinates for positioning entities.
+        Centers the grid around the origin (0,0,0).
+        """
+        world_x = (grid_x - self.grid_size / 2 + 0.5) * self.cell_size
+        world_z = (grid_y - self.grid_size / 2 + 0.5) * self.cell_size
+        return (world_x, height * self.cell_size, world_z)
+
+    def close(self):
+        """
+        Closes the Ursina application window.
+        """
+        application.quit()
