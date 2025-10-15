@@ -7,6 +7,7 @@ A custom reinforcement learning environment built with Gymnasium that simulates 
 - **Grid-based 2D World**: Configurable grid size with customizable number of plants and obstacles
 - **Procedural Content Generation**: New random map layout generated for each episode
 - **Multi-channel Observations**: 4-channel observation space suitable for CNN-based agents
+- **Dual Visualization Modes**: 2D top-down view and 3D perspective rendering
 - **Real-time Visualization**: Pygame-based rendering with color-coded elements
 - **Gymnasium API Compatible**: Fully compatible with the Gymnasium reinforcement learning library
 - **Configurable Rewards**: Structured reward system to encourage efficient plant watering
@@ -45,7 +46,18 @@ git clone <repository-url>
 cd PlantRover
 ```
 
-2. Install the required dependencies:
+2. Create and activate a virtual environment:
+```bash
+# On Windows
+python -m venv venv
+.\venv\Scripts\activate
+
+# On Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. Install the required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
@@ -126,6 +138,21 @@ The environment renders in real-time using Pygame:
 - **Green Square**: Hydrated plant (already watered)
 - **Grey Square**: Obstacle/wall
 - **Grid Lines**: Visual grid boundaries
+
+## Visualization Modes
+
+### 2D Top-down View
+- Classic grid-based visualization
+- Perfect for debugging and understanding agent behavior
+- Color-coded elements for clear state representation
+- Efficient rendering for fast training
+
+### 3D Perspective View
+- Immersive 3D visualization using OpenGL
+- Realistic plant and rover models
+- Dynamic lighting and shadows
+- Camera controls for different viewing angles
+- Toggle between views using the 'V' key
 
 ## Environment Parameters
 
