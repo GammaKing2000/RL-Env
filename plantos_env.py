@@ -20,16 +20,17 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 6, lidar_channels: int = 32):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 6, lidar_channels: int = 32, observation_mode: str = 'grid'):
         """
         Initialize the PlantOS environment.
         
         Args:
-            grid_size: Size of the grid (grid_size x grid_size) - default 21x21 like Mars Explorer
+            grid_size: Size of the grid (grid_size x grid_size)
             num_plants: Number of plants to place on the grid
             num_obstacles: Number of obstacles to place on the grid
             lidar_range: Range of LIDAR sensor in grid cells
             lidar_channels: Number of LIDAR channels for sensing
+            observation_mode: Type of observation space ('grid' or 'lidar')
         """
         super().__init__()
         
@@ -39,20 +40,29 @@ class PlantOSEnv(gym.Env):
         self.num_obstacles = num_obstacles
         self.lidar_range = lidar_range
         self.lidar_channels = lidar_channels
+        self.observation_mode = observation_mode
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
         self.action_space = spaces.Discrete(5)
         
-        # Observation space: 4-channel 3D tensor (channels, height, width)
-        # Channel 0: Obstacles (binary)
-        # Channel 1: Plant locations (binary)
-        # Channel 2: Plant thirst status (binary)
-        # Channel 3: Rover position (one-hot)
-        self.observation_space = spaces.Box(
-            low=0, high=1, 
-            shape=(4, grid_size, grid_size), 
-            dtype=np.uint8
-        )
+        # Observation space
+        if self.observation_mode == 'grid':
+            # 4-channel 3D tensor (channels, height, width)
+            self.observation_space = spaces.Box(
+                low=0, high=1, 
+                shape=(4, grid_size, grid_size), 
+                dtype=np.float32
+            )
+        elif self.observation_mode == 'lidar':
+            # LIDAR data: 2 values (distance, type) for each channel
+            # 0: empty, 1: obstacle, 2: hydrated plant, 3: thirsty plant
+            self.observation_space = spaces.Box(
+                low=0, high=max(self.lidar_range, 3),
+                shape=(self.lidar_channels * 2,),
+                dtype=np.float32
+            )
+        else:
+            raise ValueError(f"Invalid observation mode: {self.observation_mode}")
         
         # Reward constants
         self.R_GOAL = 100          # Reward for watering a thirsty plant
@@ -498,14 +508,14 @@ class PlantOSEnv(gym.Env):
         # Episode is done when all plants are hydrated (no thirsty plants)
         return not any(self.plants.values())
     
-    def _get_obs(self) -> np.ndarray:
+    def _get_grid_obs(self) -> np.ndarray:
         """
         Generate the 4-channel observation array.
         
         Returns:
             4-channel NumPy array representing the current environment state
         """
-        obs = np.zeros((4, self.grid_size, self.grid_size), dtype=np.uint8)
+        obs = np.zeros((4, self.grid_size, self.grid_size), dtype=np.float32)
         
         # Channel 0: Obstacles
         for obs_x, obs_y in self.obstacles:
@@ -525,6 +535,58 @@ class PlantOSEnv(gym.Env):
             rover_x, rover_y = self.rover_pos
             obs[3, rover_x, rover_y] = 1
         
+        return obs
+
+    def _get_obs(self) -> np.ndarray:
+        """Dispatcher to get the correct observation based on the mode."""
+        if self.observation_mode == 'grid':
+            return self._get_grid_obs()
+        else:
+            return self._get_lidar_obs()
+
+    def _get_lidar_obs(self) -> np.ndarray:
+        """
+        Generate the LIDAR-based observation array.
+        
+        Returns:
+            1D NumPy array with LIDAR data (distance, type) for each channel.
+        """
+        obs = np.zeros(self.lidar_channels * 2, dtype=np.float32)
+        rover_x, rover_y = self.rover_pos
+
+        for i in range(self.lidar_channels):
+            angle = (2 * math.pi * i) / self.lidar_channels
+            
+            distance = self.lidar_range
+            entity_type = 0  # 0 for empty
+
+            # Ray-march out to the LIDAR range
+            for r in range(1, self.lidar_range + 1):
+                dx = int(r * math.cos(angle))
+                dy = int(r * math.sin(angle))
+                
+                check_x = rover_x + dx
+                check_y = rover_y + dy
+                
+                # Check if we hit something
+                if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
+                    distance = r
+                    entity_type = 1 # Wall is like an obstacle
+                    break
+                
+                pos = (check_x, check_y)
+                if pos in self.obstacles:
+                    distance = r
+                    entity_type = 1 # Obstacle
+                    break
+                elif pos in self.plants:
+                    distance = r
+                    entity_type = 3 if self.plants[pos] else 2 # 3 for thirsty, 2 for hydrated
+                    break
+            
+            obs[i * 2] = distance / self.lidar_range # Normalize distance
+            obs[i * 2 + 1] = entity_type
+            
         return obs
     
     def _get_info(self) -> Dict[str, Any]:
