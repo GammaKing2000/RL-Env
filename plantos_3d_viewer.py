@@ -75,11 +75,15 @@ class PlantOS3DViewer:
         # Add new plants or update existing ones
         for pos, is_thirsty in plants.items():
             if pos not in self.plant_entities:
-                self.plant_entities[pos] = Entity(model='cube', scale=self.cell_size * 0.5)
+                self.plant_entities[pos] = Entity(
+                    model='quad',
+                    scale=self.cell_size,
+                    billboard=True
+                )
             
             entity = self.plant_entities[pos]
-            entity.position = self._grid_to_world(pos[0], pos[1], 0.25)
-            entity.color = color.brown if is_thirsty else color.green
+            entity.position = self._grid_to_world(pos[0], pos[1], 0.5)
+            entity.texture = 'dry_plant_bg.png' if is_thirsty else 'good_plant_bg.png'
 
     def reset_scene(self):
         """Destroys all entities to prepare for a new scene."""
