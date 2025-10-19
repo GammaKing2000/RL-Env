@@ -11,6 +11,17 @@ from plantos_3d_viewer import PlantOS3DViewer
 
 
 class PlantOSEnv(gym.Env):
+    # Observation Channels
+    OBSTACLE_CHANNEL = 0
+    PLANT_CHANNEL = 1
+    THIRST_CHANNEL = 2
+    ROVER_CHANNEL = 3
+
+    # LIDAR Entity Types
+    ENTITY_EMPTY = 0
+    ENTITY_OBSTACLE = 1
+    ENTITY_PLANT_HYDRATED = 2
+    ENTITY_PLANT_THIRSTY = 3
     """
     PlantOS Environment: A 2D grid-based plant-watering rover simulation.
     
@@ -543,21 +554,21 @@ class PlantOSEnv(gym.Env):
         
         # Channel 0: Obstacles
         for obs_x, obs_y in self.obstacles:
-            obs[0, obs_x, obs_y] = 1
+            obs[self.OBSTACLE_CHANNEL, obs_x, obs_y] = 1
         
         # Channel 1: Plant locations
         for (plant_x, plant_y) in self.plants.keys():
-            obs[1, plant_x, plant_y] = 1
+            obs[self.PLANT_CHANNEL, plant_x, plant_y] = 1
         
         # Channel 2: Plant thirst status (only thirsty plants)
         for (plant_x, plant_y), is_thirsty in self.plants.items():
             if is_thirsty:
-                obs[2, plant_x, plant_y] = 1
+                obs[self.THIRST_CHANNEL, plant_x, plant_y] = 1
         
         # Channel 3: Rover position (one-hot)
         if self.rover_pos:
             rover_x, rover_y = self.rover_pos
-            obs[3, rover_x, rover_y] = 1
+            obs[self.ROVER_CHANNEL, rover_x, rover_y] = 1
         
         return obs
 
@@ -582,7 +593,7 @@ class PlantOSEnv(gym.Env):
             angle = (2 * math.pi * i) / self.lidar_channels
             
             distance = self.lidar_range
-            entity_type = 0  # 0 for empty
+            entity_type = self.ENTITY_EMPTY
 
             # Ray-march out to the LIDAR range
             for r in range(1, self.lidar_range + 1):
@@ -595,17 +606,17 @@ class PlantOSEnv(gym.Env):
                 # Check if we hit something
                 if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
                     distance = r
-                    entity_type = 1 # Wall is like an obstacle
+                    entity_type = self.ENTITY_OBSTACLE # Wall is like an obstacle
                     break
                 
                 pos = (check_x, check_y)
                 if pos in self.obstacles:
                     distance = r
-                    entity_type = 1 # Obstacle
+                    entity_type = self.ENTITY_OBSTACLE
                     break
                 elif pos in self.plants:
                     distance = r
-                    entity_type = 3 if self.plants[pos] else 2 # 3 for thirsty, 2 for hydrated
+                    entity_type = self.ENTITY_PLANT_THIRSTY if self.plants[pos] else self.ENTITY_PLANT_HYDRATED
                     break
             
             obs[i * 2] = distance / self.lidar_range # Normalize distance
