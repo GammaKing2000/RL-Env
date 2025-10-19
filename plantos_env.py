@@ -20,7 +20,7 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 32, observation_mode: str = 'grid'):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 32, observation_mode: str = 'grid', thirsty_plant_prob: float = 0.5):
         """
         Initialize the PlantOS environment.
         
@@ -31,6 +31,7 @@ class PlantOSEnv(gym.Env):
             lidar_range: Range of LIDAR sensor in grid cells
             lidar_channels: Number of LIDAR channels for sensing
             observation_mode: Type of observation space ('grid' or 'lidar')
+            thirsty_plant_prob: Probability of a plant being thirsty at reset
         """
         super().__init__()
         
@@ -41,6 +42,7 @@ class PlantOSEnv(gym.Env):
         self.lidar_range = lidar_range
         self.lidar_channels = lidar_channels
         self.observation_mode = observation_mode
+        self.thirsty_plant_prob = thirsty_plant_prob
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
         self.action_space = spaces.Discrete(5)
@@ -383,10 +385,18 @@ class PlantOSEnv(gym.Env):
         
         # Randomly place plants
         available_positions = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size)) - self.obstacles
+
+        # Check if there is enough space for plants and the rover
+        if len(available_positions) < self.num_plants + 1: # +1 for the rover
+            raise ValueError(
+                f"Not enough available positions ({len(available_positions)}) to place "
+                f"{self.num_plants} plants and 1 rover."
+            )
+        
         plant_positions = random.sample(list(available_positions), self.num_plants)
         for plant_pos in plant_positions:
-            # Randomly assign initial plant status (50% chance of being thirsty)
-            is_thirsty = random.random() < 0.5
+            # Randomly assign initial plant status
+            is_thirsty = random.random() < self.thirsty_plant_prob
             self.plants[plant_pos] = is_thirsty
         available_positions -= set(plant_positions)
         
@@ -435,8 +445,13 @@ class PlantOSEnv(gym.Env):
                 
                 # Check bounds
                 if 0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size:
-                    # Mark as explored
-                    self.explored_map[check_x, check_y] = self.ground_truth_map[check_x, check_y]
+                    # Mark as explored, ensuring even empty space is marked
+                    if self.explored_map[check_x, check_y] == 0:
+                        value = self.ground_truth_map[check_x, check_y]
+                        if value == 0:
+                            self.explored_map[check_x, check_y] = 0.1  # Mark explored empty space
+                        else:
+                            self.explored_map[check_x, check_y] = value
                     
                     # If we hit an obstacle, stop scanning in this direction
                     if (check_x, check_y) in self.obstacles:
@@ -480,6 +495,7 @@ class PlantOSEnv(gym.Env):
             (new_x, new_y) not in self.obstacles):
             # Valid movement
             self.rover_pos = (new_x, new_y)
+            self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
             return 0
         else:
             # Invalid movement (hit wall or obstacle)
