@@ -97,7 +97,7 @@ class PlantOSEnv(gym.Env):
         # Episode tracking
         self.step_count = 0
         self.max_steps = 1000  # Like Mars Explorer
-        self.exploration_reward = 0
+        self.previous_explored_count = 0
         
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
@@ -113,7 +113,6 @@ class PlantOSEnv(gym.Env):
         
         # Reset episode tracking
         self.step_count = 0
-        self.exploration_reward = 0
         
         # Clear all previous entity locations
         self.plants.clear()
@@ -124,6 +123,9 @@ class PlantOSEnv(gym.Env):
         
         # Initialize exploration map
         self._initialize_exploration()
+
+        # Initialize previous_explored_count after the map is created
+        self.previous_explored_count = np.sum(self.explored_map > 0)
         
         # Get initial observation
         observation = self._get_obs()
@@ -448,9 +450,9 @@ class PlantOSEnv(gym.Env):
     
     def _compute_exploration_reward(self):
         """Compute reward based on newly explored cells."""
-        # Count newly explored cells
-        newly_explored = np.sum(self.explored_map > 0) - self.exploration_reward
-        self.exploration_reward = np.sum(self.explored_map > 0)
+        current_explored_count = np.sum(self.explored_map > 0)
+        newly_explored = current_explored_count - self.previous_explored_count
+        self.previous_explored_count = current_explored_count
         
         return newly_explored * self.R_EXPLORATION
     
@@ -478,8 +480,6 @@ class PlantOSEnv(gym.Env):
             (new_x, new_y) not in self.obstacles):
             # Valid movement
             self.rover_pos = (new_x, new_y)
-            # Mark new position as explored
-            self.explored_map[new_x, new_y] = 0.6
             return 0
         else:
             # Invalid movement (hit wall or obstacle)
