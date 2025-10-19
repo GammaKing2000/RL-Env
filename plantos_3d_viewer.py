@@ -18,12 +18,13 @@ class PlantOS3DViewer:
         # Scene entities
         self.ground = None
         self.rover_entity = None
+        self.cell_highlighter = None
         self.plant_entities = {}  # Maps (x, y) -> Ursina Entity
         self.obstacle_entities = {} # Maps (x, y) -> Ursina Entity
 
         # Setup camera and lighting
-        AmbientLight(color=color.rgba(1, 1, 1, 0.5))
-        DirectionalLight(color=color.rgba(1, 1, 1, 0.7), direction=(-1, -1, 1))
+        AmbientLight(color=color.rgba(1, 1, 1, 0.8))
+        DirectionalLight(color=color.rgba(1, 1, 1, 0.9), direction=(-1, -1, 1))
 
     def setup_scene(self, obstacles: set, plants: dict, rover_pos: tuple):
         """
@@ -33,8 +34,8 @@ class PlantOS3DViewer:
         self.ground = Entity(
             model='plane',
             scale=(self.grid_size * self.cell_size, 1, self.grid_size * self.cell_size),
-            color=color.hex('#8B4513'), # SaddleBrown
-            texture='white_cube',
+
+            texture='grass_texture.png',
             texture_scale=(self.grid_size, self.grid_size)
         )
 
@@ -43,7 +44,7 @@ class PlantOS3DViewer:
             x, y = obs_pos
             self.obstacle_entities[obs_pos] = Entity(
                 model='cube',
-                color=color.gray,
+                texture='obstacles_texture.png',
                 position=self._grid_to_world(x, y, 0.5),
                 scale=(self.cell_size, self.cell_size, self.cell_size)
             )
@@ -57,8 +58,17 @@ class PlantOS3DViewer:
         """
         # Update rover
         if self.rover_entity is None:
-            self.rover_entity = Entity(model='sphere', color=color.blue, scale=self.cell_size * 0.8)
-        self.rover_entity.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.4)
+            self.rover_entity = Entity(model='quad', texture='mech_drone_agent.png', billboard=True, scale=self.cell_size * 2)
+        self.rover_entity.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.5)
+
+        if self.cell_highlighter is None:
+            self.cell_highlighter = Entity(
+                model='cube',
+                color=color.green,
+                scale=(self.cell_size, 0.1, self.cell_size),
+                mode='wireframe'
+            )
+        self.cell_highlighter.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.05)
 
         # Make camera follow the rover
         camera.position = self.rover_entity.position + (0, self.grid_size * 1.0, -self.grid_size * 0.9)
@@ -77,7 +87,7 @@ class PlantOS3DViewer:
             if pos not in self.plant_entities:
                 self.plant_entities[pos] = Entity(
                     model='quad',
-                    scale=self.cell_size,
+                    scale=self.cell_size * 2,
                     billboard=True
                 )
             
@@ -98,6 +108,10 @@ class PlantOS3DViewer:
         if self.rover_entity:
             destroy(self.rover_entity)
             self.rover_entity = None
+
+        if self.cell_highlighter:
+            destroy(self.cell_highlighter)
+            self.cell_highlighter = None
 
     def render_step(self):
         """
