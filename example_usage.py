@@ -22,7 +22,7 @@ def main(max_steps_per_episode=300):
     print("=" * 60)
     
     # Create environment with Mars Explorer-like parameters
-    env = PlantOSEnv(grid_size=21, num_plants=8, num_obstacles=12, lidar_range=6, lidar_channels=32)
+    env = PlantOSEnv(grid_size=21, num_plants=20, num_obstacles=1, lidar_range=4, lidar_channels=32)
     
     total_rewards = []
     

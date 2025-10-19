@@ -20,7 +20,7 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 6, lidar_channels: int = 32, observation_mode: str = 'grid'):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 32, observation_mode: str = 'grid'):
         """
         Initialize the PlantOS environment.
         
@@ -295,6 +295,14 @@ class PlantOSEnv(gym.Env):
             lidar_surface = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
             pygame.draw.circle(lidar_surface, (0, 255, 255, 30), (radius, radius), radius)
             self.window.blit(lidar_surface, (center_x - radius, center_y - radius))
+               
+        # Draw LIDAR lines
+        # if self.rover_pos and self.lidar_indexes is not None:
+        #     rover_x, rover_y = self.rover_pos
+        #     start_pos = ((rover_x + 0.5) * self.cell_size, (rover_y + 0.5) * self.cell_size)
+        #     for point in self.lidar_indexes:
+        #         end_pos = ((point[0] + 0.5) * self.cell_size, (point[1] + 0.5) * self.cell_size)
+        #         pygame.draw.line(self.window, (255, 0, 0, 150), start_pos, end_pos, 1)
         
         # Update display
         pygame.display.flip()
@@ -624,7 +632,7 @@ if __name__ == "__main__":
     test with random actions.
     """
     # Create the environment with Mars Explorer-like parameters
-    env = PlantOSEnv(grid_size=21, num_plants=50, num_obstacles=50, lidar_range=6, lidar_channels=32)
+    env = PlantOSEnv(grid_size=21, num_plants=50, num_obstacles=50, lidar_range=2, lidar_channels=32)
     
     try:
         # Reset the environment to get initial state
