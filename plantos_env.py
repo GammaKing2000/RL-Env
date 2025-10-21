@@ -651,6 +651,12 @@ class PlantOSEnv(gym.Env):
         }
 
 
+# Register the environment with Gymnasium
+gym.register(
+    id='PlantOS-v0',
+    entry_point='plantos_env:PlantOSEnv',
+)
+
 if __name__ == "__main__":
     """
     Example usage and testing of the PlantOS environment.
