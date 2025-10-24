@@ -7,10 +7,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from stable_baselines3 import DQN
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold, CheckpointCallback
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common import logger
-from stable_baselines3.common.monitor import Monitor
+from training_utils import SaveOnIntervalCallback, visualise_training_logs
 from plantos_env import PlantOSEnv
 
 if __name__ == "__main__":
@@ -24,7 +24,7 @@ if __name__ == "__main__":
     os.makedirs(LOG_DIR, exist_ok=True)
 
     # 1. Create the vectorized environment
-    n_envs = 4  # You can adjust this number
+    n_envs = 4
     env_kwargs = {
         'grid_size': 21,
         'num_plants': 20,
@@ -75,12 +75,15 @@ if __name__ == "__main__":
         deterministic=True,
         render=False
     )
-    combined_callbacks = [eval_callback]
+
+    save_interval = 100000
+    save_callback = SaveOnIntervalCallback(save_interval, MODEL_DIR)
+    combined_callbacks = [eval_callback, save_callback]
 
     # 4. Train the model
     print("Starting DQN training with Stable Baselines3...")
     model.learn(
-        total_timesteps=1000000, # 1 Million
+        total_timesteps=200000, # 200,000
         callback=combined_callbacks
     )
     print("DQN Training Finished.")
@@ -94,23 +97,8 @@ if __name__ == "__main__":
     model.save(os.path.join(MODEL_DIR, f"dqn_plantos_final_model-{training_run}"))
 
     # 6. Visualize the training curve and save it
-    log_file = os.path.join(LOG_DIR, "monitor.csv")
-    if os.path.exists(log_file):
-        try:
-            import pandas as pd
-            import matplotlib.pyplot as plt
-            df = pd.read_csv(log_file, skiprows=1)
-            plt.figure(figsize=(10, 5))
-            plt.plot(df['l'], df['r'])
-            plt.xlabel("episodes")
-            plt.ylabel("rewards")
-            plt.title("Training Curve")
-            plt.savefig(os.path.join(MODEL_DIR, f"training_curve-{training_run}.png"))
-            print(f"Training curve saved to {os.path.join(MODEL_DIR, f'training_curve-{training_run}.png')}")
-        except ImportError:
-            print("Please install pandas and matplotlib to visualize the training curve.")
-        except Exception as e:
-            print(f"An error occurred during visualization: {e}")
+    visualise_training_logs("rollout/ep_rew_mean", "Rewards", LOG_DIR)
+    visualise_training_logs("rollout/ep_len_mean", "Episode Length", LOG_DIR)
 
     # 7. Close the environment
     env.close()
