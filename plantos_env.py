@@ -66,7 +66,7 @@ class PlantOSEnv(gym.Env):
         )
         
         # Reward constants
-        self.R_GOAL = 0.5          # Small incentive for watering a thirsty plant
+        self.R_GOAL = 3          # Small incentive for watering a thirsty plant
         self.R_MISTAKE = -100      # Penalty for watering an already hydrated plant
         self.R_INVALID = -10       # Penalty for invalid movement
         self.R_WATER_EMPTY = -5    # Penalty for watering empty space
@@ -298,25 +298,37 @@ class PlantOSEnv(gym.Env):
             else:
                 pygame.draw.rect(self.window, (0, 0, 255), (rover_x * self.cell_size, rover_y * self.cell_size, self.cell_size, self.cell_size))
         
-        # Draw LIDAR range visualization (semi-transparent circle)
+        # Draw LIDAR lines
         if self.rover_pos:
             rover_x, rover_y = self.rover_pos
-            center_x = (rover_x + 0.5) * self.cell_size
-            center_y = (rover_y + 0.5) * self.cell_size
-            radius = self.lidar_range * self.cell_size
+            start_pos = ((rover_x + 0.5) * self.cell_size, (rover_y + 0.5) * self.cell_size)
             
-            # Create a surface for the LIDAR range
-            lidar_surface = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-            pygame.draw.circle(lidar_surface, (0, 255, 255, 30), (radius, radius), radius)
-            self.window.blit(lidar_surface, (center_x - radius, center_y - radius))
-               
-        # Draw LIDAR lines
-        # if self.rover_pos and self.lidar_indexes is not None:
-        #     rover_x, rover_y = self.rover_pos
-        #     start_pos = ((rover_x + 0.5) * self.cell_size, (rover_y + 0.5) * self.cell_size)
-        #     for point in self.lidar_indexes:
-        #         end_pos = ((point[0] + 0.5) * self.cell_size, (point[1] + 0.5) * self.cell_size)
-        #         pygame.draw.line(self.window, (255, 0, 0, 150), start_pos, end_pos, 1)
+            for i in range(self.lidar_channels):
+                angle = (2 * math.pi * i) / self.lidar_channels
+                end_pos_grid = None
+
+                # Ray-march to find the endpoint for this specific beam
+                for r in range(1, self.lidar_range + 1):
+                    check_x = rover_x + int(r * math.cos(angle))
+                    check_y = rover_y + int(r * math.sin(angle))
+
+                    if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
+                        end_pos_grid = (rover_x + int((r - 1) * math.cos(angle)), rover_y + int((r - 1) * math.sin(angle)))
+                        break
+                    
+                    pos = (check_x, check_y)
+                    if pos in self.obstacles or pos in self.plants:
+                        end_pos_grid = pos
+                        break
+                
+                # If no collision, endpoint is at max range
+                if end_pos_grid is None:
+                    end_pos_grid = (rover_x + int(self.lidar_range * math.cos(angle)), rover_y + int(self.lidar_range * math.sin(angle)))
+
+                end_pos_pixel = ((end_pos_grid[0] + 0.5) * self.cell_size, (end_pos_grid[1] + 0.5) * self.cell_size)
+                
+                # Draw the line
+                pygame.draw.line(self.window, (255, 0, 0, 150), start_pos, end_pos_pixel, 1)
         
         # Update display
         pygame.display.flip()
