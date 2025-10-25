@@ -9,20 +9,23 @@ in both 2D (Pygame) and 3D (Ursina).
 import numpy as np
 from plantos_env import PlantOSEnv
 import time
+from stable_baselines3 import DQN
+import argparse
 
-def main(max_steps_per_episode=300):
+def main(model_path: str, max_steps_per_episode=300):
     """
-    Run a random agent in the PlantOS environment with full 2D and 3D visualization.
+    Run a trained agent in the PlantOS environment with full 2D and 3D visualization.
     
     Args:
-        episodes: Number of episodes to run
+        model_path: Path to the trained model zip file
         max_steps_per_episode: Maximum steps per episode
     """
     print("🌱 Starting PlantOS Environment with 2D and 3D Views")
     print("=" * 60)
     
     # Create environment with Mars Explorer-like parameters
-    env = PlantOSEnv(grid_size=21, num_plants=20, num_obstacles=1, lidar_range=4, lidar_channels=10)
+    env = PlantOSEnv(grid_size=21, num_plants=10, num_obstacles=12, lidar_range=4, lidar_channels=12)
+    model = DQN.load(model_path)
     
     total_rewards = []
     
@@ -39,8 +42,8 @@ def main(max_steps_per_episode=300):
             
             # Run episode
             for step in range(max_steps_per_episode):
-                # Take random action
-                action = env.action_space.sample()
+                # Take action from the trained model
+                action, _ = model.predict(obs, deterministic=True)
                 
                 # Execute step
                 obs, reward, terminated, truncated, info = env.step(action)
@@ -84,4 +87,7 @@ def main(max_steps_per_episode=300):
         print("Environment closed successfully!")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Run a trained agent in the PlantOS environment.')
+    parser.add_argument('model_path', type=str, help='Path to the trained model zip file')
+    args = parser.parse_args()
+    main(model_path=args.model_path)
