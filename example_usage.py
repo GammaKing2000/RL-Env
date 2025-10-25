@@ -10,6 +10,7 @@ import numpy as np
 from plantos_env import PlantOSEnv
 import time
 from stable_baselines3 import DQN
+from sb3_contrib import RecurrentPPO
 import argparse
 
 def main(model_path: str, max_steps_per_episode=300):
@@ -24,8 +25,9 @@ def main(model_path: str, max_steps_per_episode=300):
     print("=" * 60)
     
     # Create environment with Mars Explorer-like parameters
-    env = PlantOSEnv(grid_size=21, num_plants=10, num_obstacles=12, lidar_range=4, lidar_channels=12)
-    model = DQN.load(model_path)
+    env = PlantOSEnv(grid_size=21, num_plants=20, num_obstacles=12, lidar_range=6, lidar_channels=32, thirsty_plant_prob=0.5)
+    #model = DQN.load(model_path)
+    model = RecurrentPPO.load(model_path)
     
     total_rewards = []
     
@@ -91,3 +93,5 @@ if __name__ == "__main__":
     parser.add_argument('model_path', type=str, help='Path to the trained model zip file')
     args = parser.parse_args()
     main(model_path=args.model_path)
+
+    # python example_usage.py "C:\Users\mohda\.vscode\rl\a3_growr\3\RL-Env\model_800000.zip"
