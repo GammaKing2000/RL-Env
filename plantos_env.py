@@ -31,7 +31,7 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.5):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.5, observation_mode: str = "grid", render_mode: Optional[str] = None):
         """
         Initialize the PlantOS environment.
         
@@ -52,6 +52,8 @@ class PlantOSEnv(gym.Env):
         self.lidar_range = lidar_range
         self.lidar_channels = lidar_channels
         self.thirsty_plant_prob = thirsty_plant_prob
+        self.observation_mode = observation_mode
+        self.render_mode = render_mode
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
         self.action_space = spaces.Discrete(5)
