@@ -21,6 +21,7 @@ class PlantOS3DViewer:
         self.cell_highlighter = None
         self.plant_entities = {}  # Maps (x, y) -> Ursina Entity
         self.obstacle_entities = {} # Maps (x, y) -> Ursina Entity
+        self.lidar_lines = []
 
         # Setup camera and lighting
         AmbientLight(color=color.rgba(1, 1, 1, 0.8))
