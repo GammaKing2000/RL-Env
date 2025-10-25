@@ -83,7 +83,6 @@ class PlantOSEnv(gym.Env):
         # LIDAR and exploration tracking
         self.explored_map = None   # Map of explored cells
         self.ground_truth_map = None  # Complete map with all entities
-        self.lidar_indexes = None  # Current LIDAR readings
         
         # Pygame variables for rendering
         self.window = None
@@ -100,7 +99,6 @@ class PlantOSEnv(gym.Env):
         # Episode tracking
         self.step_count = 0
         self.max_steps = 1000  # Like Mars Explorer
-        self.previous_explored_count = 0
         self.collided_with_wall = False
         self.completion_bonus_given = False
         
@@ -130,9 +128,6 @@ class PlantOSEnv(gym.Env):
         
         # Initialize exploration map
         self._initialize_exploration()
-
-        # Initialize previous_explored_count after the map is created
-        self.previous_explored_count = np.sum(self.explored_map > 0)
         
         # Get initial observation
         observation = self._get_obs()
@@ -169,7 +164,6 @@ class PlantOSEnv(gym.Env):
         
         # Update LIDAR and exploration
         self._update_lidar()
-        reward += self._compute_exploration_reward()
         
         # Get current observation and info
         observation = self._get_obs()
@@ -451,47 +445,8 @@ class PlantOSEnv(gym.Env):
         """Update LIDAR readings based on current rover position."""
         if self.rover_pos is None:
             return
-        
-        rover_x, rover_y = self.rover_pos
-        lidar_indexes = []
-        
-        # Generate LIDAR readings in a circle around the rover
-        for i in range(self.lidar_channels):
-            angle = (2 * math.pi * i) / self.lidar_channels
-            for r in range(1, self.lidar_range + 1):
-                dx = int(r * math.cos(angle))
-                dy = int(r * math.sin(angle))
-                
-                check_x = rover_x + dx
-                check_y = rover_y + dy
-                
-                # Check bounds
-                if 0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size:
-                    # Mark as explored, ensuring even empty space is marked
-                    if self.explored_map[check_x, check_y] == 0:
-                        value = self.ground_truth_map[check_x, check_y]
-                        if value == 0:
-                            self.explored_map[check_x, check_y] = 0.1  # Mark explored empty space
-                        else:
-                            self.explored_map[check_x, check_y] = value
-                    
-                    # If we hit an obstacle, stop scanning in this direction
-                    if (check_x, check_y) in self.obstacles:
-                        break
-                    
-                    lidar_indexes.append([check_x, check_y])
-                else:
-                    break
-        
-        self.lidar_indexes = np.array(lidar_indexes) if lidar_indexes else np.empty((0, 2))
     
-    def _compute_exploration_reward(self):
-        """Compute reward based on newly explored cells."""
-        current_explored_count = np.sum(self.explored_map > 0)
-        newly_explored = current_explored_count - self.previous_explored_count
-        self.previous_explored_count = current_explored_count
-        
-        return newly_explored * self.R_EXPLORATION
+
     
     def _handle_movement(self, action: int) -> float:
         """
@@ -518,12 +473,13 @@ class PlantOSEnv(gym.Env):
             # Valid movement
             is_revisit = self.explored_map[new_x, new_y] > 0
             self.rover_pos = (new_x, new_y)
-            self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
             
             if is_revisit:
+                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
                 return self.R_REVISIT
             else:
-                return 0 # The positive exploration reward is handled separately
+                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
+                return self.R_EXPLORATION
         else:
             # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
@@ -559,7 +515,7 @@ class PlantOSEnv(gym.Env):
         """
         # Episode is done when all plants are hydrated (no thirsty plants)
         fully_explored = info['exploration_percentage'] >= 100
-        return self.collided_with_wall or fully_explored
+        return bool(self.collided_with_wall or fully_explored)
     
     def _get_obs(self) -> np.ndarray:
         """Generate the LIDAR-based observation array."""
@@ -658,7 +614,7 @@ if __name__ == "__main__":
     test with random actions.
     """
     # Create the environment with Mars Explorer-like parameters
-    env = PlantOSEnv(grid_size=21, num_plants=50, num_obstacles=50, lidar_range=2, lidar_channels=32)
+    env = PlantOSEnv(grid_size=21, num_plants=10, num_obstacles=12, lidar_range=4, lidar_channels=12)
     
     try:
         # Reset the environment to get initial state
