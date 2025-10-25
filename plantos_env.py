@@ -31,7 +31,7 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 32, observation_mode: str = 'grid', thirsty_plant_prob: float = 0.5):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.5):
         """
         Initialize the PlantOS environment.
         
@@ -41,7 +41,6 @@ class PlantOSEnv(gym.Env):
             num_obstacles: Number of obstacles to place on the grid
             lidar_range: Range of LIDAR sensor in grid cells
             lidar_channels: Number of LIDAR channels for sensing
-            observation_mode: Type of observation space ('grid' or 'lidar')
             thirsty_plant_prob: Probability of a plant being thirsty at reset
         """
         super().__init__()
@@ -52,38 +51,29 @@ class PlantOSEnv(gym.Env):
         self.num_obstacles = num_obstacles
         self.lidar_range = lidar_range
         self.lidar_channels = lidar_channels
-        self.observation_mode = observation_mode
         self.thirsty_plant_prob = thirsty_plant_prob
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
         self.action_space = spaces.Discrete(5)
         
-        # Observation space
-        if self.observation_mode == 'grid':
-            # 4-channel 3D tensor (channels, height, width)
-            self.observation_space = spaces.Box(
-                low=0, high=1, 
-                shape=(4, grid_size, grid_size), 
-                dtype=np.float32
-            )
-        elif self.observation_mode == 'lidar':
-            # LIDAR data: 2 values (distance, type) for each channel
-            # 0: empty, 1: obstacle, 2: hydrated plant, 3: thirsty plant
-            self.observation_space = spaces.Box(
-                low=0, high=max(self.lidar_range, 3),
-                shape=(self.lidar_channels * 2,),
-                dtype=np.float32
-            )
-        else:
-            raise ValueError(f"Invalid observation mode: {self.observation_mode}")
+        # Observation space (LIDAR only, with one-hot encoding)
+        # 1 (distance) + 4 (one-hot encoded entity types)
+        self.observation_space_per_channel = 1 + 4 
+        self.observation_space = spaces.Box(
+            low=0, high=1.0,
+            shape=(self.lidar_channels * self.observation_space_per_channel,),
+            dtype=np.float32
+        )
         
         # Reward constants
-        self.R_GOAL = 100          # Reward for watering a thirsty plant
+        self.R_GOAL = 0.5          # Small incentive for watering a thirsty plant
         self.R_MISTAKE = -100      # Penalty for watering an already hydrated plant
         self.R_INVALID = -10       # Penalty for invalid movement
         self.R_WATER_EMPTY = -5    # Penalty for watering empty space
         self.R_STEP = -0.1         # Small step penalty to encourage efficiency
-        self.R_EXPLORATION = 1     # Reward for exploring new cells
+        self.R_EXPLORATION = 10    # Reward for exploring new cells
+        self.R_REVISIT = -0.2      # Penalty for revisiting an already explored cell
+        self.R_COMPLETE_EXPLORATION = 200 # Bonus for completing exploration
         
         # Internal state variables
         self.rover_pos = None      # (x, y) coordinates of the rover
@@ -111,6 +101,8 @@ class PlantOSEnv(gym.Env):
         self.step_count = 0
         self.max_steps = 1000  # Like Mars Explorer
         self.previous_explored_count = 0
+        self.collided_with_wall = False
+        self.completion_bonus_given = False
         
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
@@ -126,6 +118,8 @@ class PlantOSEnv(gym.Env):
         
         # Reset episode tracking
         self.step_count = 0
+        self.collided_with_wall = False
+        self.completion_bonus_given = False
         
         # Clear all previous entity locations
         self.plants.clear()
@@ -177,13 +171,18 @@ class PlantOSEnv(gym.Env):
         self._update_lidar()
         reward += self._compute_exploration_reward()
         
-        # Check if episode should terminate
-        terminated = self._is_episode_done()
-        truncated = self.step_count >= self.max_steps
-        
         # Get current observation and info
         observation = self._get_obs()
         info = self._get_info()
+
+        # Check if episode should terminate
+        terminated = self._is_episode_done(info)
+        truncated = self.step_count >= self.max_steps
+
+        # Check for and award completion bonus
+        if info['exploration_percentage'] >= 100 and not self.completion_bonus_given:
+            reward += self.R_COMPLETE_EXPLORATION
+            self.completion_bonus_given = True
         
         return observation, reward, terminated, truncated, info
     
@@ -505,11 +504,17 @@ class PlantOSEnv(gym.Env):
             0 <= new_y < self.grid_size and 
             (new_x, new_y) not in self.obstacles):
             # Valid movement
+            is_revisit = self.explored_map[new_x, new_y] > 0
             self.rover_pos = (new_x, new_y)
             self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
-            return 0
+            
+            if is_revisit:
+                return self.R_REVISIT
+            else:
+                return 0 # The positive exploration reward is handled separately
         else:
             # Invalid movement (hit wall or obstacle)
+            self.collided_with_wall = True
             return self.R_INVALID
     
     def _handle_watering(self) -> float:
@@ -533,7 +538,7 @@ class PlantOSEnv(gym.Env):
             # Watering empty space
             return self.R_WATER_EMPTY
     
-    def _is_episode_done(self) -> bool:
+    def _is_episode_done(self, info: Dict[str, Any]) -> bool:
         """
         Check if the episode should terminate.
         
@@ -541,52 +546,21 @@ class PlantOSEnv(gym.Env):
             True if all thirsty plants have been watered, False otherwise
         """
         # Episode is done when all plants are hydrated (no thirsty plants)
-        return not any(self.plants.values())
+        fully_explored = info['exploration_percentage'] >= 100
+        return self.collided_with_wall or fully_explored
     
-    def _get_grid_obs(self) -> np.ndarray:
-        """
-        Generate the 4-channel observation array.
-        
-        Returns:
-            4-channel NumPy array representing the current environment state
-        """
-        obs = np.zeros((4, self.grid_size, self.grid_size), dtype=np.float32)
-        
-        # Channel 0: Obstacles
-        for obs_x, obs_y in self.obstacles:
-            obs[self.OBSTACLE_CHANNEL, obs_x, obs_y] = 1
-        
-        # Channel 1: Plant locations
-        for (plant_x, plant_y) in self.plants.keys():
-            obs[self.PLANT_CHANNEL, plant_x, plant_y] = 1
-        
-        # Channel 2: Plant thirst status (only thirsty plants)
-        for (plant_x, plant_y), is_thirsty in self.plants.items():
-            if is_thirsty:
-                obs[self.THIRST_CHANNEL, plant_x, plant_y] = 1
-        
-        # Channel 3: Rover position (one-hot)
-        if self.rover_pos:
-            rover_x, rover_y = self.rover_pos
-            obs[self.ROVER_CHANNEL, rover_x, rover_y] = 1
-        
-        return obs
-
     def _get_obs(self) -> np.ndarray:
-        """Dispatcher to get the correct observation based on the mode."""
-        if self.observation_mode == 'grid':
-            return self._get_grid_obs()
-        else:
-            return self._get_lidar_obs()
+        """Generate the LIDAR-based observation array."""
+        return self._get_lidar_obs()
 
     def _get_lidar_obs(self) -> np.ndarray:
         """
-        Generate the LIDAR-based observation array.
+        Generate the LIDAR-based observation array with one-hot encoding for entity types.
         
         Returns:
-            1D NumPy array with LIDAR data (distance, type) for each channel.
+            1D NumPy array with LIDAR data.
         """
-        obs = np.zeros(self.lidar_channels * 2, dtype=np.float32)
+        obs = np.zeros(self.lidar_channels * self.observation_space_per_channel, dtype=np.float32)
         rover_x, rover_y = self.rover_pos
 
         for i in range(self.lidar_channels):
@@ -619,8 +593,15 @@ class PlantOSEnv(gym.Env):
                     entity_type = self.ENTITY_PLANT_THIRSTY if self.plants[pos] else self.ENTITY_PLANT_HYDRATED
                     break
             
-            obs[i * 2] = distance / self.lidar_range # Normalize distance
-            obs[i * 2 + 1] = entity_type
+            # Populate the observation vector for this channel
+            start_index = i * self.observation_space_per_channel
+            # 1. Normalized distance
+            obs[start_index] = distance / self.lidar_range
+            
+            # 2. One-hot encoded entity type
+            one_hot_type = np.zeros(4, dtype=np.float32)
+            one_hot_type[entity_type] = 1.0
+            obs[start_index + 1 : start_index + 5] = one_hot_type
             
         return obs
     
@@ -642,12 +623,12 @@ class PlantOSEnv(gym.Env):
             'hydrated_plants': hydrated_count,
             'total_plants': len(self.plants),
             'step_count': self.step_count,
-            'episode_done': self._is_episode_done(),
             'explored_cells': explored_cells,
             'total_cells': total_cells,
             'exploration_percentage': (explored_cells / total_cells) * 100,
             'lidar_range': self.lidar_range,
-            'lidar_channels': self.lidar_channels
+            'lidar_channels': self.lidar_channels,
+            'collided_with_wall': self.collided_with_wall
         }
 
 
