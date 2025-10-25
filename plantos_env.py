@@ -66,7 +66,7 @@ class PlantOSEnv(gym.Env):
         )
         
         # Reward constants
-        self.R_GOAL = 3          # Small incentive for watering a thirsty plant
+        self.R_GOAL = 20          # Small incentive for watering a thirsty plant
         self.R_MISTAKE = -100      # Penalty for watering an already hydrated plant
         self.R_INVALID = -10       # Penalty for invalid movement
         self.R_WATER_EMPTY = -5    # Penalty for watering empty space
@@ -433,10 +433,10 @@ class PlantOSEnv(gym.Env):
             self.ground_truth_map[plant_x, plant_y] = 0.5
         
         # Initialize explored map (all unexplored initially)
-        self.explored_map = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        self.explored_map = np.zeros((self.grid_size, self.grid_size), dtype=np.int8)
         
         # Mark initial rover position as explored
-        self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 0.6
+        self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 2
         
         # Initialize LIDAR
         self._update_lidar()
@@ -475,10 +475,10 @@ class PlantOSEnv(gym.Env):
             self.rover_pos = (new_x, new_y)
             
             if is_revisit:
-                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
+                self.explored_map[new_x, new_y] = 2 # Mark new position as explored
                 return self.R_REVISIT
             else:
-                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
+                self.explored_map[new_x, new_y] = 2 # Mark new position as explored
                 return self.R_EXPLORATION
         else:
             # Invalid movement (hit wall or obstacle)
