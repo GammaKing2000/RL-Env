@@ -16,8 +16,8 @@ def test_environment_creation():
     assert env.grid_size == 21
     assert env.num_plants == 8
     assert env.num_obstacles == 50
-    assert env.lidar_range == 6
-    assert env.lidar_channels == 32
+    assert env.lidar_range == 2
+    assert env.lidar_channels == 10
     print("✓ Default environment created successfully")
     
     # Test custom parameters
@@ -51,17 +51,18 @@ def test_action_space():
     return True
 
 def test_observation_space():
-    """Test that the observation space is correctly defined."""
+    """Test that the observation space is correctly defined for LIDAR."""
     print("Testing observation space...")
     
     env = PlantOSEnv()
     
     # Check observation space
-    assert env.observation_space.shape == (4, env.grid_size, env.grid_size)
+    expected_shape = (env.lidar_channels * env.observation_space_per_channel,)
+    assert env.observation_space.shape == expected_shape
     assert env.observation_space.dtype == np.float32
     assert np.all(env.observation_space.low == 0)
     assert np.all(env.observation_space.high == 1)
-    print("✓ Observation space correctly defined")
+    print("✓ LIDAR observation space correctly defined")
     
     env.close()
     return True
@@ -76,11 +77,9 @@ def test_reset():
     obs, info = env.reset()
     
     # Check observation shape
-    assert obs.shape == (4, env.grid_size, env.grid_size)
+    expected_shape = (env.lidar_channels * env.observation_space_per_channel,)
+    assert obs.shape == expected_shape
     assert obs.dtype == np.float32
-    
-    # Check that observation values are binary
-    assert np.all(np.logical_or(obs == 0, obs == 1))
     
     # Check info structure
     assert 'rover_position' in info
@@ -88,7 +87,7 @@ def test_reset():
     assert 'hydrated_plants' in info
     assert 'total_plants' in info
     assert 'step_count' in info
-    assert 'episode_done' in info
+    assert 'collided_with_wall' in info # Check for new key
     assert 'explored_cells' in info
     assert 'exploration_percentage' in info
     assert 'lidar_range' in info
@@ -125,7 +124,8 @@ def test_step():
         obs, reward, terminated, truncated, info = env.step(action)
         
         # Check return values
-        assert obs.shape == (4, env.grid_size, env.grid_size)
+        expected_shape = (env.lidar_channels * env.observation_space_per_channel,)
+        assert obs.shape == expected_shape
         assert isinstance(reward, (int, float))
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
@@ -164,35 +164,39 @@ def test_episode_termination():
         print("✓ Episode correctly truncated after max_steps")
     elif terminated:
         assert step_count < max_steps
-        print("✓ Episode correctly terminated after all plants were watered")
+        print("✓ Episode correctly terminated before max_steps")
 
     env.close()
     return True
 
-def test_observation_channels():
-    """Test that the observation channels contain the expected information."""
-    print("Testing observation channels...")
+def test_lidar_observation_content():
+    """Test that the LIDAR observation content is correctly structured."""
+    print("Testing LIDAR observation content...")
     
     env = PlantOSEnv()
     obs, info = env.reset()
     
-    # Channel 0: Obstacles
-    obstacles_channel = obs[0]
-    # assert np.sum(obstacles_channel) == env.num_obstacles  # Unreliable with PCG
-    
-    # Channel 1: Plant locations
-    plants_channel = obs[1]
-    # assert np.sum(plants_channel) == env.num_plants  # Unreliable with PCG
-    
-    # Channel 2: Plant thirst status
-    thirsty_channel = obs[2]
-    assert np.sum(thirsty_channel) == info['thirsty_plants']
-    
-    # Channel 3: Rover position (should have exactly one 1)
-    rover_channel = obs[3]
-    assert np.sum(rover_channel) == 1
-    
-    print("✓ Observation channels contain correct information")
+    # Check a few observations
+    for _ in range(5):
+        per_channel = env.observation_space_per_channel
+        # Iterate through each channel's data in the observation vector
+        for i in range(env.lidar_channels):
+            start_index = i * per_channel
+            
+            # Extract data for one channel
+            distance = obs[start_index]
+            one_hot_type = obs[start_index + 1 : start_index + per_channel]
+            
+            # 1. Check that distance is normalized
+            assert 0.0 <= distance <= 1.0
+            
+            # 2. Check that the one-hot encoding is valid (sums to 1)
+            assert np.isclose(np.sum(one_hot_type), 1.0)
+            assert all(val in [0.0, 1.0] for val in one_hot_type)
+
+        obs, _, _, _, _ = env.step(env.action_space.sample())
+
+    print("✓ LIDAR observation content is correct")
     
     env.close()
     return True
@@ -235,7 +239,7 @@ def main():
         test_reset,
         test_step,
         test_episode_termination,
-        test_observation_channels,
+        test_lidar_observation_content,
         test_lidar_functionality
     ]
     

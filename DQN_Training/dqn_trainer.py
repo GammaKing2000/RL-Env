@@ -31,7 +31,6 @@ if __name__ == "__main__":
         'num_obstacles': 12,
         'lidar_range': 6,
         'lidar_channels': 32,
-        'observation_mode': 'grid',
         'thirsty_plant_prob': 0.5
     }
     env = make_vec_env('PlantOS-v0', n_envs=n_envs, env_kwargs=env_kwargs)
