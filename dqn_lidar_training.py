@@ -38,7 +38,9 @@ class CustomANN(BaseFeaturesExtractor):
         n_input_features = observation_space.shape[0]
 
         self.net = nn.Sequential(
-            nn.Linear(n_input_features, 128),
+            nn.Linear(n_input_features, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, features_dim),
             nn.ReLU()
@@ -62,14 +64,14 @@ model = DQN(
     env, # Passing the environment
     verbose=1,
     batch_size=256, # batch size for training
-    buffer_size=50000, # size of the replay buffer
-    exploration_final_eps=0.1, # final value of epsilon for epsilon-greedy exploration
-    exploration_fraction=0.12, # fraction of total timesteps for epsilon-greedy exploration
+    buffer_size=100000, # size of the replay buffer
+    exploration_final_eps=0.05, # final value of epsilon for epsilon-greedy exploration
+    exploration_fraction=0.25, # fraction of total timesteps for epsilon-greedy exploration
     gamma=0.99, # discount factor
     gradient_steps=1, # number of gradient steps to perform after each rollout
-    learning_rate=0.0001, # learning rate
-    learning_starts=1000, # number of steps before learning starts
-    target_update_interval=250, # frequency of target network updates
+    learning_rate=0.001, # learning rate
+    learning_starts=10000, # number of steps before learning starts
+    target_update_interval=1000, # frequency of target network updates
     train_freq=4, # frequency of training
     policy_kwargs=policy_kwargs # passing the custom policy kwargs
 )
@@ -89,7 +91,7 @@ class SaveOnIntervalCallback(BaseCallback):
                 print(f'Saving model to {save_file}.zip')  # Printing a message on successful save
         return True
 
-total_timesteps = 10000000
+total_timesteps = 400000
 save_interval = total_timesteps // 3
 callback = SaveOnIntervalCallback(save_interval, save_path=models_dir)
 
@@ -106,7 +108,7 @@ print("Training finished and model saved.")
 print("\nStarting evaluation...")
 del model # remove to demonstrate saving and loading
 
-model = DQN.load("dqn_plantos_lidar_sb3")
+model = DQN.load(os.path.join(models_dir, "dqn_plantos_lidar_sb3"))
 
 obs, info = env.reset()
 for i in range(1000):
@@ -127,6 +129,7 @@ def plot_results(log_folder, title="Learning Curve"):
     plt.xlabel("Number of Timesteps")
     plt.ylabel("Rewards")
     plt.title(title + " Smoothed")
+    plt.savefig('learning_curve.png')
     plt.show()
 
 plot_results(log_dir)

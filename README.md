@@ -36,7 +36,7 @@ The reward function is designed to primarily encourage exploration:
 - **+10**: For each new cell revealed by the LIDAR scan on a step.
 - **+0.5**: Small bonus for correctly watering a thirsty plant.
 - **-0.1**: Small penalty for every step taken (to encourage efficiency).
-- **-0.2**: Small penalty for moving into an already-explored cell.
+- **-2**: Penalty for moving into an already-explored cell.
 - **-5**: Penalty for attempting to water an empty space.
 - **-10**: Penalty for colliding with a wall or obstacle (ends the episode).
 - **-100**: Large penalty for watering an already hydrated plant.
@@ -72,6 +72,16 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+
+### Training the Agent
+
+To train the DQN agent, run the `dqn_lidar_training.py` script:
+
+```bash
+python dqn_lidar_training.py
+```
+
+This will start the training process and save the trained model to the `train_4Lakh/models` directory. The training progress, including the learning curve, will be saved to the `train_4Lakh/gym` directory.
 
 ### Basic Usage
 
