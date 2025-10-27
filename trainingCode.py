@@ -101,34 +101,44 @@ class CurriculumWrapper(gym.Wrapper):
 
 
 # ============================================================================
+# Helper function to create environment factory for vectorized envs
+# ============================================================================
+
+def make_env_wrapper(env_kwargs):
+    """Helper function to create environment factory for vectorized training."""
+    def _init():
+        env = PlantOSEnv(**env_kwargs)
+        env = CurriculumWrapper(env, initial_threshold=30.0, max_threshold=100.0)
+        env = Monitor(env, log_dir)  # Use same log dir for all envs
+        return env
+    return _init
+
+
+# ============================================================================
 # OPTION 1: RecurrentPPO with LSTM (RECOMMENDED for exploration tasks)
 # ============================================================================
 # RecurrentPPO is better suited for this task because it has memory,
 # allowing the agent to remember which areas have been explored
 
-def train_with_recurrent_ppo():
+def train_with_recurrent_ppo(n_envs=4):
     """Train using RecurrentPPO with LSTM policy for memory-based exploration."""
     
-    # Create the environment with improved parameters
-    env = PlantOSEnv(
-        grid_size=25,
-        num_plants=10,
-        num_obstacles=12,
-        lidar_range=6,     # DOUBLED - agent needs better vision!
-        lidar_channels=16  # MORE channels for better sensing
-    )
+    # Environment parameters
+    env_kwargs = {
+        'grid_size': 25,
+        'num_plants': 10,
+        'num_obstacles': 12,
+        'lidar_range': 6,      # DOUBLED - agent needs better vision!
+        'lidar_channels': 16   # MORE channels for better sensing
+    }
     
-    # USE progressive curriculum - starts easy, gets harder!
-    env = CurriculumWrapper(env, initial_threshold=30.0, max_threshold=100.0)
-    
-    # Wrap with Monitor to track episode statistics
-    env = Monitor(env, log_dir)
-    
-    # Verify the environment is properly configured
-    check_env(env, warn=True)
+    # Create VECTORIZED environment with N parallel instances
+    print(f"Creating {n_envs} parallel environments...")
+    env_fns = [make_env_wrapper(env_kwargs) for _ in range(n_envs)]
+    env = DummyVecEnv(env_fns)
     
     print("=" * 50)
-    print("Training with RecurrentPPO (LSTM Policy)")
+    print(f"Training with RecurrentPPO (LSTM Policy) - {n_envs} parallel envs")
     print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
@@ -202,26 +212,25 @@ def train_with_recurrent_ppo():
 # OPTION 2: Improved DQN (if you prefer to stick with DQN)
 # ============================================================================
 
-def train_with_improved_dqn():
+def train_with_improved_dqn(n_envs=4):
     """Train using DQN with improved hyperparameters."""
     
-    # Create the environment
-    env = PlantOSEnv(
-        grid_size=25,
-        num_plants=10,
-        num_obstacles=12,
-        lidar_range=6,
-        lidar_channels=16
-    )
+    # Environment parameters
+    env_kwargs = {
+        'grid_size': 25,
+        'num_plants': 10,
+        'num_obstacles': 12,
+        'lidar_range': 6,
+        'lidar_channels': 16
+    }
     
-    # NEW: Wrap with curriculum wrapper
-    env = CurriculumWrapper(env)
-    
-    env = Monitor(env, log_dir)
-    check_env(env, warn=True)
+    # Create VECTORIZED environment with N parallel instances
+    print(f"Creating {n_envs} parallel environments...")
+    env_fns = [make_env_wrapper(env_kwargs) for _ in range(n_envs)]
+    env = DummyVecEnv(env_fns)
     
     print("=" * 50)
-    print("Training with Improved DQN")
+    print(f"Training with Improved DQN - {n_envs} parallel envs")
     print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
@@ -481,11 +490,15 @@ if __name__ == "__main__":
     
     choice = input("\nEnter choice (1 or 2): ").strip()
     
+    # Ask for number of parallel environments
+    n_envs_input = input("\nNumber of parallel environments (default: 4): ").strip()
+    n_envs = int(n_envs_input) if n_envs_input else 4
+    
     if choice == "1":
-        model = train_with_recurrent_ppo()
+        model = train_with_recurrent_ppo(n_envs=n_envs)
         model_path = f"{models_dir}recurrent_ppo_final"
     elif choice == "2":
-        model = train_with_improved_dqn()
+        model = train_with_improved_dqn(n_envs=n_envs)
         model_path = f"{models_dir}dqn_improved_final"
     else:
         print("Invalid choice. Exiting.")
