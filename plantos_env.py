@@ -147,9 +147,6 @@ class PlantOSEnv(gym.Env):
         """Execute one step in the environment."""
         self.step_count += 1
         
-        # Store old observation for comparison
-        old_obs = self._get_obs()
-        
         # Initialize reward for this step
         reward = self.R_STEP  # Base step penalty
         
@@ -167,13 +164,6 @@ class PlantOSEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
         
-        # VERIFY: Check if observation changed
-        obs_changed = not np.array_equal(old_obs, observation)
-        if action < 4 and obs_changed:  # Movement should change observation
-            print(f"📊 Observation CHANGED after action (GOOD!)")
-        elif action < 4 and not obs_changed:
-            print(f"⚠️  WARNING: Observation DID NOT CHANGE after movement!")
-        
         # Check if episode should terminate
         terminated = self._is_episode_done(info)
         truncated = self.step_count >= self.max_steps
@@ -182,17 +172,12 @@ class PlantOSEnv(gym.Env):
         if info['exploration_percentage'] >= 100 and not self.completion_bonus_given:
             reward += self.R_COMPLETE_EXPLORATION
             self.completion_bonus_given = True
-            print(f"🎉 100% EXPLORATION COMPLETE! Bonus: +{self.R_COMPLETE_EXPLORATION}")
-        
-        # Print state summary every 10 steps
-        if self.step_count % 10 == 0:
-            print(f"\n📈 Step {self.step_count} | Pos: {self.rover_pos} | Exploration: {info['exploration_percentage']:.1f}% | Thirsty: {info['thirsty_plants']}/{info['total_plants']}\n")
         
         return observation, reward, terminated, truncated, info
     
     def _handle_movement(self, action: int) -> float:
         """
-        FIXED: Handle movement actions with corrected exploration tracking logic.
+        Handle movement actions with exploration tracking logic.
         
         Args:
             action: Movement action (0=North, 1=East, 2=South, 3=West)
@@ -202,11 +187,9 @@ class PlantOSEnv(gym.Env):
         """
         # Define movement directions: (dx, dy)
         directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]  # North, East, South, West
-        action_names = ["North", "East", "South", "West"]
         dx, dy = directions[action]
         
         # Calculate new position
-        old_pos = self.rover_pos
         new_x = self.rover_pos[0] + dx
         new_y = self.rover_pos[1] + dy
         
@@ -215,8 +198,8 @@ class PlantOSEnv(gym.Env):
             0 <= new_y < self.grid_size and
             (new_x, new_y) not in self.obstacles):
             
-            # FIXED: Check if it's a revisit BEFORE updating the map
-            is_revisit = self.explored_map[new_x, new_y] > 0
+            # CRITICAL FIX: Check if this cell has EVER been visited
+            was_never_visited = self.visit_counts[new_x, new_y] == 0
             
             # Mark old position as explored
             self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 1
@@ -230,21 +213,16 @@ class PlantOSEnv(gym.Env):
             # Update visit count
             self.visit_counts[new_x, new_y] += 1
             
-            # IMPROVED: Calculate reward with count-based exploration bonus
-            if is_revisit:
-                # CAP the revisit penalty to prevent extreme negatives
-                visit_penalty = self.R_REVISIT * min(self.visit_counts[new_x, new_y], 3)  # Cap at 3x
-                print(f"🔄 Move {action_names[action]}: {old_pos} → {self.rover_pos} (REVISIT #{self.visit_counts[new_x, new_y]}) | Reward: {visit_penalty:.3f}")
-                return visit_penalty
+            # FIXED: Reward ONLY for first-time visits
+            if was_never_visited:
+                # First time visiting this cell - give exploration bonus
+                return self.R_EXPLORATION
             else:
-                # ADD: Intrinsic curiosity bonus that decays
-                curiosity_bonus = self.R_EXPLORATION * (1.0 + 1.0 / (1.0 + self.visit_counts[new_x, new_y]))
-                print(f"🆕 Move {action_names[action]}: {old_pos} → {self.rover_pos} (NEW CELL) | Reward: +{curiosity_bonus:.3f}")
-                return curiosity_bonus
+                # Revisiting - just give small penalty to discourage backtracking
+                return self.R_REVISIT
         else:
             # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
-            print(f"🚫 Move {action_names[action]}: {old_pos} → ({new_x}, {new_y}) BLOCKED! | Penalty: {self.R_INVALID}")
             return self.R_INVALID
     
     def _handle_watering(self) -> float:
@@ -255,14 +233,11 @@ class PlantOSEnv(gym.Env):
             if plant_status:  # Plant is thirsty
                 # Water the plant successfully
                 self.plants[self.rover_pos] = False
-                print(f"✅ Watered thirsty plant at {self.rover_pos}! Reward: +{self.R_GOAL}")
                 return self.R_GOAL
             else:  # Plant is already hydrated
-                print(f"⚠️  Tried to water already hydrated plant at {self.rover_pos}! Penalty: {self.R_MISTAKE}")
                 return self.R_MISTAKE
         else:
             # Watering empty space
-            print(f"❌ Watered empty space at {self.rover_pos}! Penalty: {self.R_WATER_EMPTY}")
             return self.R_WATER_EMPTY
     
     def _initialize_exploration(self):
@@ -455,7 +430,7 @@ class PlantOSEnv(gym.Env):
             self.clock = pygame.time.Clock()
             
             # Load images if available, otherwise use colored rectangles
-            assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+            assets_dir = os.path.dirname(os.path.abspath(__file__))
             
             try:
                 self.background_img = pygame.image.load(os.path.join(assets_dir, 'grass_texture.png'))
