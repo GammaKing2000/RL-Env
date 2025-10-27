@@ -304,7 +304,7 @@ class EvaluationCallback(BaseCallback):
         self.eval_freq = eval_freq
         self.best_mean_exploration = 0
         self.exploration_history = []
-        self.maze_completion_count = 0  # NEW: Track maze completions
+        self.maze_completion_count = 0
     
     def _on_step(self) -> bool:
         if self.n_calls % self.eval_freq == 0:
@@ -317,7 +317,6 @@ class EvaluationCallback(BaseCallback):
                 for ep_info in recent_episodes:
                     if 'exploration_percentage' in ep_info:
                         explorations.append(ep_info['exploration_percentage'])
-                        # NEW: Count completed mazes
                         if ep_info['exploration_percentage'] >= 100.0:
                             self.maze_completion_count += 1
                 
@@ -325,12 +324,13 @@ class EvaluationCallback(BaseCallback):
                     mean_exploration = np.mean(explorations)
                     self.exploration_history.append(mean_exploration)
                     
-                    print(f"\n[Step {self.n_calls}] Mean Exploration: {mean_exploration:.2f}%")
-                    print(f"Mazes completed so far: {self.maze_completion_count}")
+                    # Log to file instead of printing (avoid Jupyter recursion bug)
+                    with open(f"{self.log_dir}training_log.txt", "a") as f:
+                        f.write(f"[Step {self.n_calls}] Mean Exploration: {mean_exploration:.2f}%\n")
+                        f.write(f"Mazes completed: {self.maze_completion_count}\n")
                     
                     if mean_exploration > self.best_mean_exploration:
                         self.best_mean_exploration = mean_exploration
-                        print(f"New best exploration rate: {self.best_mean_exploration:.2f}%")
         
         return True
 
