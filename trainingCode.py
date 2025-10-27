@@ -10,6 +10,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 from plantos_env import PlantOSEnv
 
 # Create directories for logs and models
@@ -104,12 +105,13 @@ class CurriculumWrapper(gym.Wrapper):
 # Helper function to create environment factory for vectorized envs
 # ============================================================================
 
-def make_env_wrapper(env_kwargs):
+def make_env_wrapper(env_kwargs, rank=0):
     """Helper function to create environment factory for vectorized training."""
     def _init():
         env = PlantOSEnv(**env_kwargs)
         env = CurriculumWrapper(env, initial_threshold=30.0, max_threshold=100.0)
-        env = Monitor(env, log_dir)  # Use same log dir for all envs
+        # Monitor each env with separate log file to avoid CSV corruption
+        env = Monitor(env, os.path.join(log_dir, f"env_{rank}"))
         return env
     return _init
 
@@ -134,7 +136,7 @@ def train_with_recurrent_ppo(n_envs=4):
     
     # Create VECTORIZED environment with N parallel instances
     print(f"Creating {n_envs} parallel environments...")
-    env_fns = [make_env_wrapper(env_kwargs) for _ in range(n_envs)]
+    env_fns = [make_env_wrapper(env_kwargs, rank=i) for i in range(n_envs)]
     env = DummyVecEnv(env_fns)
     
     print("=" * 50)
@@ -159,9 +161,10 @@ def train_with_recurrent_ppo(n_envs=4):
         verbose=1,
         tensorboard_log=f"{log_dir}tensorboard/",
         policy_kwargs=dict(
-            lstm_hidden_size=256,     # LSTM hidden state size
-            n_lstm_layers=1,          # Number of LSTM layers
+            lstm_hidden_size=512,     # INCREASED: 512 for better memory (was 256)
+            n_lstm_layers=2,          # INCREASED: 2 layers for deeper memory (was 1)
             enable_critic_lstm=True,  # Use LSTM for critic too
+            net_arch=[256, 256],      # Additional feedforward layers before LSTM
         )
     )
     
@@ -177,7 +180,7 @@ def train_with_recurrent_ppo(n_envs=4):
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 100000  # Train MUCH longer for proper learning
+    total_timesteps = 2000000  # Train MUCH longer for proper learning
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -226,7 +229,7 @@ def train_with_improved_dqn(n_envs=4):
     
     # Create VECTORIZED environment with N parallel instances
     print(f"Creating {n_envs} parallel environments...")
-    env_fns = [make_env_wrapper(env_kwargs) for _ in range(n_envs)]
+    env_fns = [make_env_wrapper(env_kwargs, rank=i) for i in range(n_envs)]
     env = DummyVecEnv(env_fns)
     
     print("=" * 50)
@@ -247,9 +250,9 @@ def train_with_improved_dqn(n_envs=4):
     train_freq=4,                    # Train more frequently
     gradient_steps=1,
     target_update_interval=1000,    # More frequent target updates
-    exploration_fraction=0.8,        # CRITICAL: Explore for 80% of training!
+    exploration_fraction=0.35,        # CRITICAL: Explore for 80% of training!
     exploration_initial_eps=1.0,
-    exploration_final_eps=0.15,      # KEEP EXPLORING - never go below 15%
+    exploration_final_eps=0.01,      # KEEP EXPLORING - never go below 15%
     max_grad_norm=10.0,
     verbose=1,
     policy_kwargs=dict(
@@ -268,7 +271,7 @@ def train_with_improved_dqn(n_envs=4):
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 100000  # Train longer
+    total_timesteps = 10000000  # Train longer
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -351,11 +354,15 @@ class EvaluationCallback(BaseCallback):
 def plot_learning_curve(log_dir, title="Learning Curve"):
     """Plot the learning curve from training logs."""
     try:
+        # Load results from all environment subdirectories
         results = load_results(log_dir)
         
         if len(results) == 0:
             print("No results to plot yet.")
             return
+        
+        # Sort by timesteps to ensure chronological order
+        results = results.sort_values('t')
         
         x, y = ts2xy(results, 'timesteps')
         
@@ -418,6 +425,10 @@ def test_trained_model(model_path, num_episodes=5):
         render_mode='2d'
     )
     
+    # CRITICAL FIX: Wrap with curriculum wrapper to match training environment
+    # This ensures visit counts persist and agent behavior matches training
+    env = CurriculumWrapper(env, initial_threshold=100.0, max_threshold=100.0)
+    
     # Load model
     # Use RecurrentPPO.load() or DQN.load() depending on which you trained
     try:
@@ -445,6 +456,8 @@ def test_trained_model(model_path, num_episodes=5):
         print(f"Episode {episode + 1}")
         print(f"{'='*50}")
         
+        last_progress_print = 0
+        
         while not done:
             # Get action from model
             if use_lstm:
@@ -465,13 +478,23 @@ def test_trained_model(model_path, num_episodes=5):
             total_reward += reward
             steps += 1
             
-            # Render
-            env.render('2d')
+            # Print progress every 100 steps to show it's not frozen
+            if steps - last_progress_print >= 100:
+                print(f"  Step {steps}: Exploration {info['exploration_percentage']:.1f}%, Reward: {total_reward:.1f}")
+                last_progress_print = steps
+            
+            # Render (access unwrapped env to use custom render method)
+            env.unwrapped.render('2d')
+            
+            # Small delay to prevent pygame window from becoming unresponsive
+            # and to make visualization easier to follow
+            time.sleep(0.01)  # 10ms delay = ~100 FPS max (faster than pygame's 30 FPS limit)
         
-        print(f"Episode finished in {steps} steps")
-        print(f"Total reward: {total_reward:.2f}")
-        print(f"Exploration: {info['exploration_percentage']:.2f}%")
-        print(f"Thirsty plants remaining: {info['thirsty_plants']}")
+        print(f"\n✅ Episode finished in {steps} steps")
+        print(f"   Total reward: {total_reward:.2f}")
+        print(f"   Exploration: {info['exploration_percentage']:.2f}%")
+        print(f"   Thirsty plants remaining: {info['thirsty_plants']}")
+        print(f"   Plants watered: {info['total_plants'] - info['thirsty_plants']}/{info['total_plants']}")
     
     env.close()
 
@@ -482,33 +505,70 @@ def test_trained_model(model_path, num_episodes=5):
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("PlantOS Environment Training")
+    print("PlantOS Environment Training & Testing")
     print("="*60)
-    print("\nChoose training algorithm:")
-    print("1. RecurrentPPO (LSTM) - RECOMMENDED for exploration")
-    print("2. Improved DQN")
+    print("\nChoose an option:")
+    print("1. Train with RecurrentPPO (LSTM) - RECOMMENDED for exploration")
+    print("2. Train with Improved DQN")
+    print("3. Test existing model")
     
-    choice = input("\nEnter choice (1 or 2): ").strip()
+    choice = input("\nEnter choice (1, 2, or 3): ").strip()
     
-    # Ask for number of parallel environments
-    n_envs_input = input("\nNumber of parallel environments (default: 4): ").strip()
-    n_envs = int(n_envs_input) if n_envs_input else 4
+    if choice == "3":
+        # Option 3: Test existing model
+        print("\n" + "="*60)
+        print("Test Existing Model")
+        print("="*60)
+        
+        # Prompt for model path
+        print("\nExample paths:")
+        print("  - train_improved/models/recurrent_ppo_final")
+        print("  - train_improved/models/dqn_improved_final")
+        print("  - train_improved/models/recurrent_ppo_model_500000_steps")
+        
+        model_path = input("\nEnter model path (without .zip extension): ").strip()
+        
+        # Verify file exists
+        if not os.path.exists(f"{model_path}.zip"):
+            print(f"\n❌ Error: Model file '{model_path}.zip' not found!")
+            print("Please check the path and try again.")
+            exit()
+        
+        # Ask for number of test episodes
+        num_episodes_input = input("\nNumber of test episodes (default: 3): ").strip()
+        num_episodes = int(num_episodes_input) if num_episodes_input else 3
+        
+        print(f"\n🚀 Loading and testing model: {model_path}")
+        test_trained_model(model_path, num_episodes=num_episodes)
+        
+        print("\n" + "="*60)
+        print("Testing complete!")
+        print("="*60)
+        
+    elif choice in ["1", "2"]:
+        # Options 1 & 2: Training
+        # Ask for number of parallel environments
+        n_envs_input = input("\nNumber of parallel environments (default: 4): ").strip()
+        n_envs = int(n_envs_input) if n_envs_input else 4
+        
+        if choice == "1":
+            model = train_with_recurrent_ppo(n_envs=n_envs)
+            model_path = f"{models_dir}recurrent_ppo_final"
+        elif choice == "2":
+            model = train_with_improved_dqn(n_envs=n_envs)
+            model_path = f"{models_dir}dqn_improved_final"
+        
+        # Ask if user wants to test the trained model
+        test = input("\nTest the trained model? (y/n): ").strip().lower()
+        if test == 'y':
+            num_episodes_input = input("Number of test episodes (default: 3): ").strip()
+            num_episodes = int(num_episodes_input) if num_episodes_input else 3
+            test_trained_model(model_path, num_episodes=num_episodes)
+        
+        print("\n" + "="*60)
+        print("Training complete!")
+        print("="*60)
     
-    if choice == "1":
-        model = train_with_recurrent_ppo(n_envs=n_envs)
-        model_path = f"{models_dir}recurrent_ppo_final"
-    elif choice == "2":
-        model = train_with_improved_dqn(n_envs=n_envs)
-        model_path = f"{models_dir}dqn_improved_final"
     else:
         print("Invalid choice. Exiting.")
         exit()
-    
-    # Ask if user wants to test the trained model
-    test = input("\nTest the trained model? (y/n): ").strip().lower()
-    if test == 'y':
-        test_trained_model(model_path, num_episodes=3)
-    
-    print("\n" + "="*60)
-    print("Training complete!")
-    print("="*60)

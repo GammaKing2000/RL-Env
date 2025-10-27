@@ -63,10 +63,22 @@ class PlantOSEnv(gym.Env):
         # Observation space (LIDAR only, with one-hot encoding)
         # 1 (distance) + 4 (one-hot encoded entity types)
         self.observation_space_per_channel = 1 + 4
-        # ADD: 2 extra values for normalized rover position (x, y)
+        
+        # Local visit map parameters
+        self.visit_map_size = 5  # 5x5 grid around rover
+        self.visit_map_cells = self.visit_map_size * self.visit_map_size  # 25 cells
+        
+        # Observation space components:
+        # - LIDAR: lidar_channels * 5 values
+        # - Position: 2 values (x, y)
+        # - Local visit map: 25 values (5x5 grid)
+        total_obs_size = (self.lidar_channels * self.observation_space_per_channel + 
+                         2 +  # position
+                         self.visit_map_cells)  # local visit counts
+        
         self.observation_space = spaces.Box(
             low=0, high=1.0,
-            shape=(self.lidar_channels * self.observation_space_per_channel + 2,),  # +2 for position
+            shape=(total_obs_size,),
             dtype=np.float32
         )
         
@@ -74,7 +86,7 @@ class PlantOSEnv(gym.Env):
         self.R_GOAL = 100                      # INCREASED: Strong incentive for watering (was 20)
         self.R_MISTAKE = -50                   # REDUCED: Less harsh penalty (was -100)
         self.R_INVALID = -1                    # REDUCED: Much less harsh for wall hits (was -10)
-        self.R_WATER_EMPTY = -1                # REDUCED: Less harsh (was -5)
+        self.R_WATER_EMPTY = -5                # REDUCED: Less harsh (was -5)
         self.R_STEP = -0.01                    # REDUCED: Tiny step penalty (was -0.05)
         self.R_EXPLORATION = 10                # REDUCED: More realistic (was 50)
         self.R_REVISIT = -0.05                 # REDUCED: Minimal penalty (was -0.1)
@@ -173,6 +185,12 @@ class PlantOSEnv(gym.Env):
             reward += self.R_COMPLETE_EXPLORATION
             self.completion_bonus_given = True
         
+        # --- DEBUG: print step summary  ---
+        #print(f"[DEBUG] Step {self.step_count:4d} | Pos {self.rover_pos} | "
+            #f"Act {action} | Rew {reward:.2f} | "
+            #f"Expl {info['exploration_percentage']:.1f}% | "
+           # f"Term={terminated} Trunc={truncated}")
+        
         return observation, reward, terminated, truncated, info
     
     def _handle_movement(self, action: int) -> float:
@@ -192,6 +210,9 @@ class PlantOSEnv(gym.Env):
         # Calculate new position
         new_x = self.rover_pos[0] + dx
         new_y = self.rover_pos[1] + dy
+
+          # --- DEBUG: show the attempted move ---
+        #print(f"[DEBUG] Move action {action}: old {self.rover_pos} -> cand ({new_x}, {new_y})")
         
         # Check if new position is valid (within bounds and not an obstacle)
         if (0 <= new_x < self.grid_size and
@@ -212,6 +233,9 @@ class PlantOSEnv(gym.Env):
             
             # Update visit count
             self.visit_counts[new_x, new_y] += 1
+
+            # --- DEBUG: confirm move happened ---
+            #print(f"[DEBUG]    MOVED to {self.rover_pos} | visits={self.visit_counts[new_x, new_y]}")
             
             # FIXED: Reward ONLY for first-time visits
             if was_never_visited:
@@ -223,6 +247,8 @@ class PlantOSEnv(gym.Env):
         else:
             # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
+            # --- DEBUG: blocked move ---
+            #print(f"[DEBUG]    BLOCKED at {self.rover_pos} (hit wall/obstacle/bounds)")
             return self.R_INVALID
     
     def _handle_watering(self) -> float:
@@ -270,7 +296,9 @@ class PlantOSEnv(gym.Env):
     def _is_episode_done(self, info: Dict[str, Any]) -> bool:
         """Check if the episode should terminate."""
         fully_explored = info['exploration_percentage'] >= 100
-        return bool(self.collided_with_wall or fully_explored)
+        # REMOVED: Wall collision termination - too harsh for exploration!
+        # The agent should be allowed to bump into walls without episode ending
+        return bool(fully_explored)
     
     def _get_obs(self) -> np.ndarray:
         """Generate the LIDAR-based observation array."""
@@ -278,9 +306,16 @@ class PlantOSEnv(gym.Env):
     
     def _get_lidar_obs(self) -> np.ndarray:
         """Generate the LIDAR-based observation array with one-hot encoding for entity types."""
-        obs = np.zeros(self.lidar_channels * self.observation_space_per_channel + 2, dtype=np.float32)  # +2 for position
+        # Calculate total observation size
+        lidar_size = self.lidar_channels * self.observation_space_per_channel
+        position_size = 2
+        visit_map_size = self.visit_map_cells
+        total_size = lidar_size + position_size + visit_map_size
+        
+        obs = np.zeros(total_size, dtype=np.float32)
         rover_x, rover_y = self.rover_pos
         
+        # ===== LIDAR OBSERVATIONS =====
         for i in range(self.lidar_channels):
             angle = (2 * math.pi * i) / self.lidar_channels
             distance = self.lidar_range
@@ -321,9 +356,33 @@ class PlantOSEnv(gym.Env):
             one_hot_type[entity_type] = 1.0
             obs[start_index + 1 : start_index + 5] = one_hot_type
         
-        # ADD: Normalized rover position at the end of observation
-        obs[-2] = rover_x / self.grid_size  # Normalized x position
-        obs[-1] = rover_y / self.grid_size  # Normalized y position
+        # ===== ROVER POSITION =====
+        position_start = lidar_size
+        obs[position_start] = rover_x / self.grid_size      # Normalized x position
+        obs[position_start + 1] = rover_y / self.grid_size  # Normalized y position
+        
+        # ===== LOCAL VISIT MAP (5x5 grid around rover) =====
+        visit_map_start = lidar_size + position_size
+        visit_map = np.zeros(self.visit_map_cells, dtype=np.float32)
+        
+        # Extract 5x5 local visit counts centered on rover
+        half_size = self.visit_map_size // 2  # 2 for 5x5
+        for local_x in range(self.visit_map_size):
+            for local_y in range(self.visit_map_size):
+                # Convert local coordinates to global grid coordinates
+                global_x = rover_x + (local_x - half_size)
+                global_y = rover_y + (local_y - half_size)
+                
+                # Check if within grid bounds
+                if 0 <= global_x < self.grid_size and 0 <= global_y < self.grid_size:
+                    # Normalize visit count (cap at 10 visits, then normalize to [0, 1])
+                    visit_count = min(self.visit_counts[global_x, global_y], 10) / 10.0
+                    visit_map[local_x * self.visit_map_size + local_y] = visit_count
+                else:
+                    # Out of bounds = treat as "fully explored" (visited)
+                    visit_map[local_x * self.visit_map_size + local_y] = 1.0
+        
+        obs[visit_map_start:visit_map_start + self.visit_map_cells] = visit_map
         
         return obs
     
