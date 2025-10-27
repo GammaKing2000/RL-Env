@@ -31,7 +31,7 @@ class PlantOSEnv(gym.Env):
     maps each episode and multi-channel observations suitable for CNN-based agents.
     """
     
-    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.5, observation_mode: str = "grid", render_mode: Optional[str] = None):
+    def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.5, render_mode: Optional[str] = None):
         """
         Initialize the PlantOS environment.
         
@@ -52,7 +52,7 @@ class PlantOSEnv(gym.Env):
         self.lidar_range = lidar_range
         self.lidar_channels = lidar_channels
         self.thirsty_plant_prob = thirsty_plant_prob
-        self.observation_mode = observation_mode
+
         self.render_mode = render_mode
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
@@ -68,14 +68,27 @@ class PlantOSEnv(gym.Env):
         )
         
         # Reward constants
-        self.R_GOAL = 20          # Small incentive for watering a thirsty plant
-        self.R_MISTAKE = -100      # Penalty for watering an already hydrated plant
-        self.R_INVALID = -10       # Penalty for invalid movement
-        self.R_WATER_EMPTY = -5    # Penalty for watering empty space
-        self.R_STEP = -0.1         # Small step penalty to encourage efficiency
-        self.R_EXPLORATION = 10    # Reward for exploring new cells
-        self.R_REVISIT = -0.2      # Penalty for revisiting an already explored cell
-        self.R_COMPLETE_EXPLORATION = 200 # Bonus for completing exploration
+        self.R_GOAL = 10              # REDUCE from 20 to 10
+        self.R_MISTAKE = -5           # REDUCE from -10 to -5 (less harsh)
+        self.R_INVALID = -0.5         # REDUCE from -1.0 to -0.5
+        self.R_WATER_EMPTY = -1.0     # REDUCE from -2 to -1.0
+        self.R_STEP = -0.05           # INCREASE from -0.01 to -0.05
+        self.R_EXPLORATION = 0.1      # Dramatically reduce exploration reward
+        self.R_REVISIT = -0.05        # Very small penalty
+        self.R_REVERSAL = -0.5        # Penalty for reversing action
+        self.R_COMPLETE_EXPLORATION = 500  # Large completion bonus
+
+        # Milestone tracking for progressive exploration rewards
+        self.milestone_10 = False
+        self.milestone_25 = False
+        self.milestone_50 = False
+        self.milestone_75 = False
+
+        # Milestone reward values
+        self.R_MILESTONE_10 = 10
+        self.R_MILESTONE_25 = 50   # Reward for reaching 25% exploration
+        self.R_MILESTONE_50 = 75   # Reward for reaching 50% exploration
+        self.R_MILESTONE_75 = 100  # Reward for reaching 75% exploration
         
         # Internal state variables
         self.rover_pos = None      # (x, y) coordinates of the rover
@@ -97,10 +110,12 @@ class PlantOSEnv(gym.Env):
         self.plant_hydrated_img = None
 
         self.viewer_3d = None
+        self.last_action = None
         
         # Episode tracking
         self.step_count = 0
-        self.max_steps = 1000  # Like Mars Explorer
+        self.max_steps = 3000  # Like Mars Explorer
+        self.previous_explored_count = 0
         self.collided_with_wall = False
         self.completion_bonus_given = False
         
@@ -117,9 +132,16 @@ class PlantOSEnv(gym.Env):
         super().reset(seed=seed)
         
         # Reset episode tracking
+        self.last_action = None
         self.step_count = 0
         self.collided_with_wall = False
         self.completion_bonus_given = False
+
+        # Reset milestone flags
+        self.milestone_10 = False
+        self.milestone_25 = False
+        self.milestone_50 = False
+        self.milestone_75 = False
         
         # Clear all previous entity locations
         self.plants.clear()
@@ -130,6 +152,9 @@ class PlantOSEnv(gym.Env):
         
         # Initialize exploration map
         self._initialize_exploration()
+
+        # Initialize previous_explored_count after the map is created
+        self.previous_explored_count = np.sum(self.explored_map > 0)
         
         # Get initial observation
         observation = self._get_obs()
@@ -154,25 +179,47 @@ class PlantOSEnv(gym.Env):
         """
         self.step_count += 1
         
+        # The action from the model is a numpy array, so we extract the scalar value
+        action_int = int(action.item()) if hasattr(action, 'item') else int(action)
+
+
         # Initialize reward for this step
-        reward = -self.R_STEP  # Base step penalty
+        reward = self.R_STEP  # Base step penalty
+
+
+        # Reversal penalty
+        if self.last_action is not None:
+            reverse_actions = {0: 2, 1: 3, 2: 0, 3: 1}  # UP↔DOWN, LEFT↔RIGHT
+            
+            # Only penalize movement action reversals (not watering)
+            if action_int < 4 and self.last_action < 4:
+                if action_int == reverse_actions.get(self.last_action):
+                    reward += self.R_REVERSAL  # -0.1
+
+        # Update last action AFTER checking reversal
+        self.last_action = action_int
+
+                
         
         # Handle movement actions (0-3)
-        if action < 4:
-            reward += self._handle_movement(action)
+        if action_int < 4:
+            reward += self._handle_movement(action_int)
         # Handle watering action (4)
         else:
             reward += self._handle_watering()
         
         # Update LIDAR and exploration
         self._update_lidar()
+        reward += self._compute_exploration_reward()
+        reward += self.compute_milestone_rewards()
+        reward += self.compute_frontier_bonus()
         
         # Get current observation and info
         observation = self._get_obs()
         info = self._get_info()
 
         # Check if episode should terminate
-        terminated = self._is_episode_done(info)
+        terminated = self.is_episode_done(info)
         truncated = self.step_count >= self.max_steps
 
         # Check for and award completion bonus
@@ -345,81 +392,32 @@ class PlantOSEnv(gym.Env):
             self.clock = None
 
     def _generate_map(self):
-        """Generate a maze with paths that are 3 cells wide using a randomized DFS."""
-        # 1. Start with a grid full of obstacles.
-        self.obstacles = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size))
+        """Generate a map with randomly placed obstacles."""
+        # Start with an empty set of obstacles
+        self.obstacles.clear()
 
-        # Define a smaller "meta" grid to generate the maze structure
-        # Each cell in the meta-grid corresponds to a 3x3 area in the main grid
-        meta_w = (self.grid_size - 1) // 4
-        meta_h = (self.grid_size - 1) // 4
-        
-        # Visited cells in the meta-grid
-        visited = np.zeros((meta_w, meta_h), dtype=bool)
-        
-        # Stack for DFS
-        stack = []
-        
-        # Start carving from a random cell in the meta-grid
-        start_x, start_y = random.randint(0, meta_w - 1), random.randint(0, meta_h - 1)
-        stack.append((start_x, start_y))
-        visited[start_x, start_y] = True
-        
-        # Carve out the initial 3x3 area
-        for i in range(3):
-            for j in range(3):
-                self.obstacles.discard((start_x * 4 + 1 + i, start_y * 4 + 1 + j))
+        # Get all possible positions on the grid
+        all_positions = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size))
 
-        # Randomized DFS on the meta-grid
-        while stack:
-            cx, cy = stack[-1]
-            
-            # Get unvisited neighbors
-            neighbors = []
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < meta_w and 0 <= ny < meta_h and not visited[nx, ny]:
-                    neighbors.append((nx, ny))
-            
-            if neighbors:
-                # Choose a random neighbor
-                nx, ny = random.choice(neighbors)
-                
-                # Carve a 3-cell wide path to the neighbor
-                for i in range(4):
-                    for j in range(3):
-                        self.obstacles.discard((min(cx, nx) * 4 + 1 + (i if cx != nx else j), 
-                                                min(cy, ny) * 4 + 1 + (i if cy != ny else j)))
-                
-                # Also carve out the new 3x3 room at the destination
-                for i in range(3):
-                    for j in range(3):
-                        self.obstacles.discard((nx * 4 + 1 + i, ny * 4 + 1 + j))
+        # Randomly choose a starting position for the rover
+        self.rover_pos = random.choice(list(all_positions))
+        available_positions = all_positions - {self.rover_pos}
 
-                visited[nx, ny] = True
-                stack.append((nx, ny))
-            else:
-                stack.pop()
-        
         # Randomly place plants
-        available_positions = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size)) - self.obstacles
-
-        # Check if there is enough space for plants and the rover
-        if len(available_positions) < self.num_plants + 1: # +1 for the rover
-            raise ValueError(
-                f"Not enough available positions ({len(available_positions)}) to place "
-                f"{self.num_plants} plants and 1 rover."
-            )
-        
         plant_positions = random.sample(list(available_positions), self.num_plants)
         for plant_pos in plant_positions:
-            # Randomly assign initial plant status
             is_thirsty = random.random() < self.thirsty_plant_prob
             self.plants[plant_pos] = is_thirsty
         available_positions -= set(plant_positions)
-        
-        # Randomly place rover
-        self.rover_pos = random.choice(list(available_positions))
+
+        # Randomly place obstacles
+        if len(available_positions) < self.num_obstacles:
+            raise ValueError(
+                f"Not enough available positions ({len(available_positions)}) to place "
+                f"{self.num_obstacles} obstacles."
+            )
+        obstacle_positions = random.sample(list(available_positions), self.num_obstacles)
+        self.obstacles = set(obstacle_positions)
     
     def _initialize_exploration(self):
         """Initialize the exploration map and ground truth map."""
@@ -435,19 +433,97 @@ class PlantOSEnv(gym.Env):
             self.ground_truth_map[plant_x, plant_y] = 0.5
         
         # Initialize explored map (all unexplored initially)
-        self.explored_map = np.zeros((self.grid_size, self.grid_size), dtype=np.int8)
+        self.explored_map = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
         
         # Mark initial rover position as explored
-        self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 2
+        self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 0.6
         
         # Initialize LIDAR
         self._update_lidar()
     
-    def _update_lidar(self):
-        """Update LIDAR readings based on current rover position."""
+    def _update_lidar(self):   
+    #Mark all cells visible by LIDAR as explored.
         if self.rover_pos is None:
             return
+        
+        rover_x, rover_y = self.rover_pos
+        
+        for i in range(self.lidar_channels):
+            angle = (2 * math.pi * i) / self.lidar_channels
+            
+            # Ray-march and mark all cells along the ray as explored
+            for r in range(1, self.lidar_range + 1):
+                dx = int(r * math.cos(angle))
+                dy = int(r * math.sin(angle))
+                check_x = rover_x + dx
+                check_y = rover_y + dy
+                
+                # Out of bounds - stop ray
+                if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
+                    break
+                
+                pos = (check_x, check_y)
+                
+                # Mark this cell as explored (use 0.3 for LIDAR-scanned cells vs 0.6 for visited)
+                if self.explored_map[check_x, check_y] == 0:
+                    self.explored_map[check_x, check_y] = 0.3
+                
+                # Stop ray at obstacles or plants
+                if pos in self.obstacles or pos in self.plants:
+                    break
+
     
+    def _compute_exploration_reward(self):
+        """Compute reward based on newly explored cells."""
+        current_explored_count = np.sum(self.explored_map > 0)
+        newly_explored = current_explored_count - self.previous_explored_count
+        self.previous_explored_count = current_explored_count
+        
+        # Directly reward the number of newly explored cells
+        return newly_explored * self.R_EXPLORATION
+
+
+
+    def compute_milestone_rewards(self) -> float:
+        milestone_reward = 0
+        explored_cells = np.sum(self.explored_map > 0)
+        total_cells = self.grid_size * self.grid_size
+        exploration_pct = explored_cells / total_cells
+        
+        if exploration_pct >= 0.10 and not self.milestone_10:
+            milestone_reward += self.R_MILESTONE_10
+            self.milestone_10 = True
+            
+        if exploration_pct >= 0.25 and not self.milestone_25:
+            milestone_reward += self.R_MILESTONE_25
+            self.milestone_25 = True
+            
+        if exploration_pct >= 0.50 and not self.milestone_50:
+            milestone_reward += self.R_MILESTONE_50
+            self.milestone_50 = True
+            
+        if exploration_pct >= 0.75 and not self.milestone_75:
+            milestone_reward += self.R_MILESTONE_75
+            self.milestone_75 = True
+        
+        return milestone_reward
+
+
+    def compute_frontier_bonus(self) -> float:
+        """Give small bonus for being near unexplored cells."""
+        rover_x, rover_y = self.rover_pos
+        unexplored_nearby = 0
+        
+        # Only check immediate neighbors (radius 1, not 3)
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                check_x = rover_x + dx
+                check_y = rover_y + dy
+                if 0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size:
+                    if self.explored_map[check_x, check_y] == 0:
+                        unexplored_nearby += 1
+        
+        return 0.01 * unexplored_nearby  # Much smaller: 0.01 instead of 0.1
 
     
     def _handle_movement(self, action: int) -> float:
@@ -477,11 +553,11 @@ class PlantOSEnv(gym.Env):
             self.rover_pos = (new_x, new_y)
             
             if is_revisit:
-                self.explored_map[new_x, new_y] = 2 # Mark new position as explored
+                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
                 return self.R_REVISIT
             else:
-                self.explored_map[new_x, new_y] = 2 # Mark new position as explored
-                return self.R_EXPLORATION
+                self.explored_map[new_x, new_y] = 0.6 # Mark new position as explored
+                return 0 # The positive exploration reward is handled separately
         else:
             # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
@@ -508,19 +584,25 @@ class PlantOSEnv(gym.Env):
             # Watering empty space
             return self.R_WATER_EMPTY
     
-    def _is_episode_done(self, info: Dict[str, Any]) -> bool:
+    def is_episode_done(self, info: Dict[str, Any]) -> bool:
         """
-        Check if the episode should terminate.
+        Episode ends when:
+        1. High exploration achieved (90%+)
+        2. Or collision with wall
+        3. Or timeout (handled by truncated)
+        """
+        high_exploration = info['exploration_percentage'] >= 90.0  # 90% is good enough
         
-        Returns:
-            True if all thirsty plants have been watered, False otherwise
-        """
-        # Episode is done when all plants are hydrated (no thirsty plants)
-        fully_explored = info['exploration_percentage'] >= 100
-        return bool(self.collided_with_wall or fully_explored)
+        # Optional: Allow early termination if agent gets stuck
+        # stuck = (self.step_count > 1000 and info['exploration_percentage'] < 10)
+        
+        return high_exploration  # or stuck
+
+
     
     def _get_obs(self) -> np.ndarray:
-        """Generate the LIDAR-based observation array."""
+        """
+        Generate the LIDAR-based observation array."""
         return self._get_lidar_obs()
 
     def _get_lidar_obs(self) -> np.ndarray:
@@ -610,7 +692,7 @@ gym.register(
 
 if __name__ == "__main__":
     """
-    Example usage and testing of the PlantOS environment.
+    Example usage and testing of the PlantOS environment. 
     
     This block demonstrates how to use the environment and runs a simple
     test with random actions.
@@ -624,7 +706,7 @@ if __name__ == "__main__":
         print_reset_info(info, initial=True)
         
         # Run the environment for a fixed number of steps
-        for step in range(1000):  # Run for 1000 steps
+        for step in range(3000):  # Run for 3000 steps
             # Take a random action
             action = env.action_space.sample()  # Take a random action
             

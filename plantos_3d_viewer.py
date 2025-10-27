@@ -1,4 +1,3 @@
-
 from ursina import *
 from ursina import application
 
@@ -6,7 +5,7 @@ class PlantOS3DViewer:
     """
     Manages the 3D visualization of the PlantOS environment using Ursina.
     """
-    def __init__(self, grid_size: int, cell_size: int = 1):
+    def __init__(self, grid_size: int = 21, cell_size: int = 1):
         """
         Initializes the 3D viewer.
         Note: The Ursina app is a singleton; it can only be initialized once.
