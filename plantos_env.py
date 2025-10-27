@@ -198,8 +198,8 @@ class PlantOSEnv(gym.Env):
             0 <= new_y < self.grid_size and
             (new_x, new_y) not in self.obstacles):
             
-            # Check if it's a revisit BEFORE updating the map
-            is_revisit = self.explored_map[new_x, new_y] > 0
+            # CRITICAL FIX: Check if this cell has EVER been visited
+            was_never_visited = self.visit_counts[new_x, new_y] == 0
             
             # Mark old position as explored
             self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 1
@@ -213,15 +213,13 @@ class PlantOSEnv(gym.Env):
             # Update visit count
             self.visit_counts[new_x, new_y] += 1
             
-            # Calculate reward with count-based exploration bonus
-            if is_revisit:
-                # CAP the revisit penalty to prevent extreme negatives
-                visit_penalty = self.R_REVISIT * min(self.visit_counts[new_x, new_y], 3)  # Cap at 3x
-                return visit_penalty
+            # FIXED: Reward ONLY for first-time visits
+            if was_never_visited:
+                # First time visiting this cell - give exploration bonus
+                return self.R_EXPLORATION
             else:
-                # Intrinsic curiosity bonus that decays
-                curiosity_bonus = self.R_EXPLORATION * (1.0 + 1.0 / (1.0 + self.visit_counts[new_x, new_y]))
-                return curiosity_bonus
+                # Revisiting - just give small penalty to discourage backtracking
+                return self.R_REVISIT
         else:
             # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
@@ -432,7 +430,7 @@ class PlantOSEnv(gym.Env):
             self.clock = pygame.time.Clock()
             
             # Load images if available, otherwise use colored rectangles
-            assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+            assets_dir = os.path.dirname(os.path.abspath(__file__))
             
             try:
                 self.background_img = pygame.image.load(os.path.join(assets_dir, 'grass_texture.png'))

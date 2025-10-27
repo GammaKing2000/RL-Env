@@ -24,54 +24,81 @@ os.makedirs(models_dir, exist_ok=True)
 
 class CurriculumWrapper(gym.Wrapper):
     """
-    Wrapper that keeps the same maze until the agent achieves 100% exploration.
-    Only then does it generate a new maze (curriculum learning).
+    PROGRESSIVE curriculum: Start with low threshold, gradually increase.
+    This prevents the agent from getting stuck on impossible-for-now mazes.
     """
-    def __init__(self, env):
+    def __init__(self, env, initial_threshold=30.0, max_threshold=100.0, threshold_increment=5.0):
         super().__init__(env)
         self.maze_completed = False
         self.episode_count = 0
         self.successful_explorations = 0
-        self.current_maze_seed = None  # NEW: Track current maze seed
+        self.current_maze_seed = None
+        self.persistent_visit_counts = None
+        
+        # PROGRESSIVE CURRICULUM PARAMETERS
+        self.exploration_threshold = initial_threshold  # Start low!
+        self.max_threshold = max_threshold
+        self.threshold_increment = threshold_increment
+        self.episodes_on_current_maze = 0
+        self.max_episodes_per_maze = 50  # Give up after 50 attempts
         
     def reset(self, **kwargs):
-        """Only generate new maze if previous one was fully explored."""
+        """Only generate new maze if threshold reached OR max attempts exceeded."""
         self.episode_count += 1
+        self.episodes_on_current_maze += 1
         
         # Remove 'seed' from kwargs to avoid duplicate argument
         kwargs.pop('seed', None)
         
-        # If maze was completed in last episode, generate a new one
-        if self.maze_completed:
-            print(f"\n{'='*60}")
-            print(f"🎉 MAZE COMPLETED! Generating new maze...")
-            print(f"Successful explorations so far: {self.successful_explorations}")
-            print(f"{'='*60}\n")
-            self.maze_completed = False
+        # Check if we should move to a new maze
+        timeout = self.episodes_on_current_maze >= self.max_episodes_per_maze
+        
+        if self.maze_completed or timeout:
+            if self.maze_completed:
+                print(f"\n🎉 Maze completed at {self.exploration_threshold:.0f}% threshold!")
+                # Increase difficulty for next maze
+                self.exploration_threshold = min(
+                    self.exploration_threshold + self.threshold_increment,
+                    self.max_threshold
+                )
+                print(f"📈 New exploration threshold: {self.exploration_threshold:.0f}%")
+                self.successful_explorations += 1
+            else:
+                print(f"\n⏰ Timeout: {self.episodes_on_current_maze} episodes on this maze. Moving on...")
+                # DON'T increase threshold on timeout - try again at same difficulty
             
-            # NEW: Generate new random seed for new maze
+            self.maze_completed = False
+            self.episodes_on_current_maze = 0
+            
+            # Generate new maze
             self.current_maze_seed = np.random.randint(0, 10000)
             obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
+            self.persistent_visit_counts = None
         else:
-            # Keep the same maze - reuse the current seed
+            # Keep the same maze
             if self.current_maze_seed is None:
-                # First episode - create initial maze
                 self.current_maze_seed = np.random.randint(0, 10000)
             
-            # ⚠️ CRITICAL: Reset with SAME seed = same maze layout
-            # This will regenerate plants as thirsty again!
             obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
-            print(f"📍 Episode {self.episode_count}: Reusing maze (seed={self.current_maze_seed})")
+            
+            # Restore visit counts
+            if self.persistent_visit_counts is not None:
+                self.env.visit_counts = self.persistent_visit_counts.copy()
+            else:
+                self.persistent_visit_counts = self.env.visit_counts.copy()
             
         return obs, info
     
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         
-        # Check if exploration reached 100%
-        if info['exploration_percentage'] >= 100.0:
+        # Check if exploration reached CURRENT threshold (not always 100%)
+        if info['exploration_percentage'] >= self.exploration_threshold:
             self.maze_completed = True
-            self.successful_explorations += 1
+        
+        # Save visit counts at every step
+        if self.persistent_visit_counts is not None:
+            self.persistent_visit_counts = self.env.visit_counts.copy()
             
         return obs, reward, terminated, truncated, info
 
@@ -90,12 +117,12 @@ def train_with_recurrent_ppo():
         grid_size=25,
         num_plants=10,
         num_obstacles=12,
-        lidar_range=4,
-        lidar_channels=12
+        lidar_range=6,     # DOUBLED - agent needs better vision!
+        lidar_channels=16  # MORE channels for better sensing
     )
     
-    # NEW: Wrap with curriculum wrapper
-    env = CurriculumWrapper(env)
+    # USE progressive curriculum - starts easy, gets harder!
+    env = CurriculumWrapper(env, initial_threshold=30.0, max_threshold=100.0)
     
     # Wrap with Monitor to track episode statistics
     env = Monitor(env, log_dir)
@@ -143,7 +170,7 @@ def train_with_recurrent_ppo():
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 1_000_000
+    total_timesteps = 100000  # Train MUCH longer for proper learning
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -186,8 +213,8 @@ def train_with_improved_dqn():
         grid_size=25,
         num_plants=10,
         num_obstacles=12,
-        lidar_range=4,
-        lidar_channels=12
+        lidar_range=6,
+        lidar_channels=16
     )
     
     # NEW: Wrap with curriculum wrapper
@@ -235,7 +262,7 @@ def train_with_improved_dqn():
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 10000000  # Train longer
+    total_timesteps = 100000  # Train longer
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -375,13 +402,13 @@ def plot_learning_curve(log_dir, title="Learning Curve"):
 def test_trained_model(model_path, num_episodes=5):
     """Test a trained model and visualize its performance."""
     
-    # Create environment
+    # Create environment MATCHING THE TRAINING PARAMETERS!
     env = PlantOSEnv(
         grid_size=25,
         num_plants=10,
         num_obstacles=12,
-        lidar_range=4,
-        lidar_channels=12,
+        lidar_range=6,     # MUST MATCH TRAINING!
+        lidar_channels=16,  # MUST MATCH TRAINING!
         render_mode='2d'
     )
     
