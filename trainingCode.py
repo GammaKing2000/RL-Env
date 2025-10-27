@@ -55,17 +55,14 @@ class CurriculumWrapper(gym.Wrapper):
         
         if self.maze_completed or timeout:
             if self.maze_completed:
-                print(f"\n🎉 Maze completed at {self.exploration_threshold:.0f}% threshold!")
-                # Increase difficulty for next maze
+                # Silently increase difficulty - avoid Jupyter display bugs
                 self.exploration_threshold = min(
                     self.exploration_threshold + self.threshold_increment,
                     self.max_threshold
                 )
-                print(f"📈 New exploration threshold: {self.exploration_threshold:.0f}%")
                 self.successful_explorations += 1
-            else:
-                print(f"\n⏰ Timeout: {self.episodes_on_current_maze} episodes on this maze. Moving on...")
-                # DON'T increase threshold on timeout - try again at same difficulty
+            # else:
+            #     # Timeout - try again at same difficulty
             
             self.maze_completed = False
             self.episodes_on_current_maze = 0
