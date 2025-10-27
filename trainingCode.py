@@ -6,6 +6,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.results_plotter import load_results, ts2xy
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.vec_env import DummyVecEnv
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +17,64 @@ log_dir = "train_improved/gym/"
 models_dir = "train_improved/models/"
 os.makedirs(log_dir, exist_ok=True)
 os.makedirs(models_dir, exist_ok=True)
+
+# ============================================================================
+# NEW: Wrapper to keep maze until 100% exploration
+# ============================================================================
+
+class CurriculumWrapper(gym.Wrapper):
+    """
+    Wrapper that keeps the same maze until the agent achieves 100% exploration.
+    Only then does it generate a new maze (curriculum learning).
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        self.maze_completed = False
+        self.episode_count = 0
+        self.successful_explorations = 0
+        self.current_maze_seed = None  # NEW: Track current maze seed
+        
+    def reset(self, **kwargs):
+        """Only generate new maze if previous one was fully explored."""
+        self.episode_count += 1
+        
+        # Remove 'seed' from kwargs to avoid duplicate argument
+        kwargs.pop('seed', None)
+        
+        # If maze was completed in last episode, generate a new one
+        if self.maze_completed:
+            print(f"\n{'='*60}")
+            print(f"🎉 MAZE COMPLETED! Generating new maze...")
+            print(f"Successful explorations so far: {self.successful_explorations}")
+            print(f"{'='*60}\n")
+            self.maze_completed = False
+            
+            # NEW: Generate new random seed for new maze
+            self.current_maze_seed = np.random.randint(0, 10000)
+            obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
+        else:
+            # Keep the same maze - reuse the current seed
+            if self.current_maze_seed is None:
+                # First episode - create initial maze
+                self.current_maze_seed = np.random.randint(0, 10000)
+            
+            # ⚠️ CRITICAL: Reset with SAME seed = same maze layout
+            # This will regenerate plants as thirsty again!
+            obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
+            print(f"📍 Episode {self.episode_count}: Reusing maze (seed={self.current_maze_seed})")
+            
+        return obs, info
+    
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        
+        # Check if exploration reached 100%
+        if info['exploration_percentage'] >= 100.0:
+            self.maze_completed = True
+            self.successful_explorations += 1
+            
+        return obs, reward, terminated, truncated, info
+
 
 # ============================================================================
 # OPTION 1: RecurrentPPO with LSTM (RECOMMENDED for exploration tasks)
@@ -35,6 +94,9 @@ def train_with_recurrent_ppo():
         lidar_channels=12
     )
     
+    # NEW: Wrap with curriculum wrapper
+    env = CurriculumWrapper(env)
+    
     # Wrap with Monitor to track episode statistics
     env = Monitor(env, log_dir)
     
@@ -43,6 +105,7 @@ def train_with_recurrent_ppo():
     
     print("=" * 50)
     print("Training with RecurrentPPO (LSTM Policy)")
+    print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
     # Create RecurrentPPO model with LSTM
@@ -127,33 +190,37 @@ def train_with_improved_dqn():
         lidar_channels=12
     )
     
+    # NEW: Wrap with curriculum wrapper
+    env = CurriculumWrapper(env)
+    
     env = Monitor(env, log_dir)
     check_env(env, warn=True)
     
     print("=" * 50)
     print("Training with Improved DQN")
+    print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
-    # Create DQN model with improved hyperparameters
+    # Create DQN model with FIXED hyperparameters for exploration
     model = DQN(
     "MlpPolicy",
     env,
-    learning_rate=1e-4,              # REDUCE (was 5e-4) - slower, more stable learning
-    buffer_size=200000,             # INCREASE dramatically (was 200K)
-    learning_starts=50000,          # INCREASE (was 10K) - collect more diverse data first
-    batch_size=64,                   # REDUCE (was 128) - more frequent updates
-    tau=0.001,                       # REDUCE (was 0.005) - slower target network updates
-    gamma=0.995,                     # INCREASE (was 0.99) - value long-term exploration
-    train_freq=8,                    # INCREASE (was 4) - train less frequently
+    learning_rate=5e-4,              # INCREASED - faster initial learning
+    buffer_size=100000,              # Sufficient buffer
+    learning_starts=5000,            # START EARLIER - begin learning sooner
+    batch_size=128,                  # Larger batches for stability
+    tau=0.005,                       # Faster target updates
+    gamma=0.99,                      # Standard discount (was too high)
+    train_freq=4,                    # Train more frequently
     gradient_steps=1,
-    target_update_interval=5000,    # INCREASE (was 1000) - much slower target updates
-    exploration_fraction=0.7,        # INCREASE to 70% of training (was 50%)
+    target_update_interval=1000,    # More frequent target updates
+    exploration_fraction=0.8,        # CRITICAL: Explore for 80% of training!
     exploration_initial_eps=1.0,
-    exploration_final_eps=0.10,      # INCREASE final epsilon (was 0.05) - keep exploring
-    max_grad_norm=10.0,              # ADD: Gradient clipping to prevent instability
+    exploration_final_eps=0.15,      # KEEP EXPLORING - never go below 15%
+    max_grad_norm=10.0,
     verbose=1,
     policy_kwargs=dict(
-        net_arch=[512, 512, 256, 128]  # DEEPER network for complex exploration
+        net_arch=[256, 256]          # SIMPLER network - easier to train
         )
     )
     
@@ -168,7 +235,7 @@ def train_with_improved_dqn():
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 1_500_000  # Train longer
+    total_timesteps = 10000000  # Train longer
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -213,6 +280,7 @@ class EvaluationCallback(BaseCallback):
         self.eval_freq = eval_freq
         self.best_mean_exploration = 0
         self.exploration_history = []
+        self.maze_completion_count = 0  # NEW: Track maze completions
     
     def _on_step(self) -> bool:
         if self.n_calls % self.eval_freq == 0:
@@ -223,20 +291,18 @@ class EvaluationCallback(BaseCallback):
                 # Extract exploration percentages if available
                 explorations = []
                 for ep_info in recent_episodes:
-                    if hasattr(self.training_env, 'get_attr'):
-                        # For vectorized environments
-                        try:
-                            info = self.training_env.get_attr('info')[0]
-                            if 'exploration_percentage' in info:
-                                explorations.append(info['exploration_percentage'])
-                        except:
-                            pass
+                    if 'exploration_percentage' in ep_info:
+                        explorations.append(ep_info['exploration_percentage'])
+                        # NEW: Count completed mazes
+                        if ep_info['exploration_percentage'] >= 100.0:
+                            self.maze_completion_count += 1
                 
                 if explorations:
                     mean_exploration = np.mean(explorations)
                     self.exploration_history.append(mean_exploration)
                     
                     print(f"\n[Step {self.n_calls}] Mean Exploration: {mean_exploration:.2f}%")
+                    print(f"Mazes completed so far: {self.maze_completion_count}")
                     
                     if mean_exploration > self.best_mean_exploration:
                         self.best_mean_exploration = mean_exploration
@@ -378,13 +444,15 @@ def test_trained_model(model_path, num_episodes=5):
 
 
 # ============================================================================
-# Main execution
+# Main Execution
 # ============================================================================
 
 if __name__ == "__main__":
-    # Choose which algorithm to use
-    print("Choose training algorithm:")
-    print("1. RecurrentPPO with LSTM (RECOMMENDED)")
+    print("\n" + "="*60)
+    print("PlantOS Environment Training")
+    print("="*60)
+    print("\nChoose training algorithm:")
+    print("1. RecurrentPPO (LSTM) - RECOMMENDED for exploration")
     print("2. Improved DQN")
     
     choice = input("\nEnter choice (1 or 2): ").strip()
@@ -392,11 +460,18 @@ if __name__ == "__main__":
     if choice == "1":
         model = train_with_recurrent_ppo()
         model_path = f"{models_dir}recurrent_ppo_final"
-    else:
+    elif choice == "2":
         model = train_with_improved_dqn()
         model_path = f"{models_dir}dqn_improved_final"
+    else:
+        print("Invalid choice. Exiting.")
+        exit()
     
     # Ask if user wants to test the trained model
     test = input("\nTest the trained model? (y/n): ").strip().lower()
     if test == 'y':
         test_trained_model(model_path, num_episodes=3)
+    
+    print("\n" + "="*60)
+    print("Training complete!")
+    print("="*60)
