@@ -1,0 +1,70 @@
+# Project Overview: PlantOS Reinforcement Learning Environment
+
+This document provides an overview of the PlantOS project, a reinforcement learning environment for training an agent to water plants.
+
+## How to Run the Project
+
+The project is run using the `example_usage.py` script, which loads a trained model and runs it in the environment.
+
+To run the simulation, use the following command:
+```
+python example_usage.py <path_to_model.zip>
+```
+For example:
+```
+python example_usage.py DQN_Training/dqn_improved_final.zip
+```
+
+## Environment Details (`plantos_env.py`)
+
+The environment is a 2D grid world where a rover has to navigate and water thirsty plants.
+
+- **Grid:** A 21x21 grid.
+- **Rover:** The agent that navigates the grid.
+- **Plants:** Randomly placed plants that can be either thirsty or hydrated.
+- **Obstacles:** Randomly placed obstacles that the rover must avoid.
+
+The simulation runs in episodes. Each episode starts with a new, randomly generated map.
+
+## Action Space
+
+The rover has 5 discrete actions:
+- 0: Move North
+- 1: Move East
+- 2: Move South
+- 3: Move West
+- 4: Water the plant at the current location
+
+## State Space (Observation Space)
+
+The agent's observation is a 1D vector containing three main components:
+
+1.  **LIDAR Sensor:**
+    - The rover has a LIDAR sensor with 16 channels that scans the surroundings.
+    - For each channel, it gets the distance to the nearest object and a one-hot encoded type of the object (Empty, Obstacle, Hydrated Plant, Thirsty Plant).
+
+2.  **Rover Position:**
+    - The rover's normalized (x, y) coordinates in the grid.
+
+3.  **Local Visit Map:**
+    - A 5x5 grid centered on the rover that shows how many times the rover has visited each cell. This helps the agent to explore new areas.
+
+## Reward System
+
+The agent receives rewards or penalties for its actions:
+
+- **Positive Rewards:**
+    - `R_GOAL` (+100): For successfully watering a thirsty plant.
+    - `R_EXPLORATION` (+10): For visiting a cell for the first time.
+    - `R_COMPLETE_EXPLORATION` (+500): For exploring the entire map.
+
+- **Penalties (Negative Rewards):**
+    - `R_MISTAKE` (-50): For watering an already hydrated plant.
+    - `R_INVALID` (-1): For bumping into a wall or an obstacle.
+    - `R_WATER_EMPTY` (-5): For watering an empty cell.
+    - `R_STEP` (-0.01): A small penalty for each step taken, to encourage efficiency.
+    - `R_REVISIT` (-0.05): A small penalty for revisiting a cell.
+
+## Algorithm
+
+The project uses a Deep Q-Network (DQN) agent, a popular model-free reinforcement learning algorithm. The trained DQN model is loaded from a `.zip` file and used to predict the best action at each step.

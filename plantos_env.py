@@ -83,14 +83,14 @@ class PlantOSEnv(gym.Env):
         )
         
         # IMPROVED REWARD CONSTANTS
-        self.R_GOAL = 100                      # INCREASED: Strong incentive for watering (was 20)
-        self.R_MISTAKE = -50                   # REDUCED: Less harsh penalty (was -100)
-        self.R_INVALID = -1                    # REDUCED: Much less harsh for wall hits (was -10)
+        self.R_GOAL = 20                # INCREASED: Strong incentive for watering (was 20)
+        self.R_MISTAKE = -10                 # REDUCED: Less harsh penalty (was -100)
+        self.R_INVALID = -5                  # REDUCED: Much less harsh for wall hits (was -10)
         self.R_WATER_EMPTY = -5                # REDUCED: Less harsh (was -5)
-        self.R_STEP = -0.01                    # REDUCED: Tiny step penalty (was -0.05)
-        self.R_EXPLORATION = 150                # REDUCED: More realistic (was 50)
-        self.R_REVISIT = -0.05                 # REDUCED: Minimal penalty (was -0.1)
-        self.R_COMPLETE_EXPLORATION = 500      # Bonus for completing exploration
+        self.R_STEP = -0.1                    # REDUCED: Tiny step penalty (was -0.05)
+        self.R_EXPLORATION = 10              # REDUCED: More realistic (was 50)
+        self.R_REVISIT = -1                # REDUCED: Minimal penalty (was -0.1)
+        self.R_COMPLETE_EXPLORATION = 50      # Bonus for completing exploration
         
         # Internal state variables
         self.rover_pos = None
@@ -468,9 +468,8 @@ class PlantOSEnv(gym.Env):
         """Render the environment using Pygame (2D) and/or Ursina (3D)."""
         if mode in ['2d', 'human']:
             self._render_2d()
-        # Disable 3D rendering due to Ursina crashes
-        # if mode in ['3d', 'human']:
-        #     self._render_3d()
+        if mode in ['3d', 'human']:
+            self._render_3d()
     
     def _render_3d(self):
         """Handles the Ursina 3D rendering."""

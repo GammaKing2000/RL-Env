@@ -31,12 +31,8 @@ class PlantOS3DViewer:
         """
         Creates the initial 3D scene with static and dynamic objects.
         """
-        # Get assets directory
-        import os
-        assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
-        
         # Create the ground plane
-        grass_texture = os.path.join(assets_dir, 'grass_texture.png') if os.path.exists(os.path.join(assets_dir, 'grass_texture.png')) else None
+        grass_texture = 'grass_texture.png' if os.path.exists('grass_texture.png') else None
         self.ground = Entity(
             model='plane',
             scale=(self.grid_size * self.cell_size, 1, self.grid_size * self.cell_size),
@@ -46,7 +42,7 @@ class PlantOS3DViewer:
         )
 
         # Create obstacles
-        obstacle_texture = os.path.join(assets_dir, 'obstacles_texture.png') if os.path.exists(os.path.join(assets_dir, 'obstacles_texture.png')) else None
+        obstacle_texture = 'obstacles_texture.png' if os.path.exists('obstacles_texture.png') else None
         for obs_pos in obstacles:
             x, y = obs_pos
             self.obstacle_entities[obs_pos] = Entity(
@@ -64,13 +60,9 @@ class PlantOS3DViewer:
         """
         Updates the 3D scene to reflect the current state of the environment.
         """
-        # Get assets directory
-        import os
-        assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
-        
         # Update rover
         if self.rover_entity is None:
-            rover_texture = os.path.join(assets_dir, 'mech_drone_agent.png')
+            rover_texture = 'mech_drone_agent.png'
             self.rover_entity = Entity(
                 model='quad', 
                 texture=rover_texture if os.path.exists(rover_texture) else None,
@@ -105,8 +97,8 @@ class PlantOS3DViewer:
             destroy(self.plant_entities.pop(pos))
 
         # Get texture paths
-        thirsty_texture = os.path.join(assets_dir, 'dry_plant_bg.png')
-        hydrated_texture = os.path.join(assets_dir, 'good_plant_bg.png')
+        thirsty_texture = 'dry_plant_bg.png'
+        hydrated_texture = 'good_plant_bg.png'
 
         # Add new plants or update existing ones
         for pos, is_thirsty in plants.items():
