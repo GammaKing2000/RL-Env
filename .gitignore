@@ -10,3 +10,4 @@ __pycache__/
 *$py.class
 
 train_improved/models
+a2c_training

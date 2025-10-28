@@ -82,15 +82,25 @@ class PlantOSEnv(gym.Env):
             dtype=np.float32
         )
         
-        # IMPROVED REWARD CONSTANTS
-        self.R_GOAL = 20                # INCREASED: Strong incentive for watering (was 20)
-        self.R_MISTAKE = -10                 # REDUCED: Less harsh penalty (was -100)
-        self.R_INVALID = -5                  # REDUCED: Much less harsh for wall hits (was -10)
-        self.R_WATER_EMPTY = -5                # REDUCED: Less harsh (was -5)
-        self.R_STEP = -0.1                    # REDUCED: Tiny step penalty (was -0.05)
-        self.R_EXPLORATION = 10              # REDUCED: More realistic (was 50)
-        self.R_REVISIT = -1                # REDUCED: Minimal penalty (was -0.1)
-        self.R_COMPLETE_EXPLORATION = 50      # Bonus for completing exploration
+        # Rewards for A2C - avg_exploration ~ 87%, 10mil steps, with curriculum learning, 512 n_env, 20 minutes
+        self.R_GOAL = 200                   # watering plants
+        self.R_MISTAKE = -20                # watering hydrated plant
+        self.R_INVALID = -11                # invalid move (collision or out of bounds)
+        self.R_WATER_EMPTY = -20            # watering empty space
+        self.R_STEP = -0.1                  # small step penalty to encourage efficiency
+        self.R_EXPLORATION = 10             # Bonus for exploring new cell
+        self.R_REVISIT = -3                 # Small penalty for revisiting explored cell
+        self.R_COMPLETE_EXPLORATION = 100   # Bonus for fully exploring the map
+
+        # Rewards for DQN - avg_exploration ~ 97%, 10mil steps, with curriculum learning, 512 n_env, 9 minutes
+        # self.R_GOAL = 20
+        # self.R_MISTAKE = -10
+        # self.R_INVALID = -5
+        # self.R_WATER_EMPTY = -5
+        # self.R_STEP = -0.1
+        # self.R_EXPLORATION = 10
+        # self.R_REVISIT = -1
+        # self.R_COMPLETE_EXPLORATION = 50
         
         # Internal state variables
         self.rover_pos = None
