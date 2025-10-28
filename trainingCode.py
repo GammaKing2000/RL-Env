@@ -241,22 +241,22 @@ def train_with_improved_dqn(n_envs=4):
     model = DQN(
     "MlpPolicy",
     env,
-    learning_rate=5e-4,              # INCREASED - faster initial learning
-    buffer_size=100000,              # Sufficient buffer
+    learning_rate=3e-4,              # SMALLER LR - more stable
+    buffer_size=2000000,              # Larger buffer for more diverse experiences
     learning_starts=5000,            # START EARLIER - begin learning sooner
-    batch_size=128,                  # Larger batches for stability
+    batch_size=64,                   # Smaller batches - less overfitting
     tau=0.005,                       # Faster target updates
     gamma=0.99,                      # Standard discount (was too high)
     train_freq=4,                    # Train more frequently
     gradient_steps=1,
-    target_update_interval=1000,    # More frequent target updates
-    exploration_fraction=0.35,        # CRITICAL: Explore for 80% of training!
+    target_update_interval=5000,     # LESS frequent - more stable
+    exploration_fraction=0.7,         # EXPLORE for 70% of training (7M steps)
     exploration_initial_eps=1.0,
-    exploration_final_eps=0.01,      # KEEP EXPLORING - never go below 15%
+    exploration_final_eps=0.05,      # Minimum 5% exploration
     max_grad_norm=10.0,
     verbose=1,
     policy_kwargs=dict(
-        net_arch=[256, 256]          # SIMPLER network - easier to train
+        net_arch=[512, 512, 256]     # LARGER network - better capacity
         )
     )
     

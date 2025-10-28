@@ -88,7 +88,7 @@ class PlantOSEnv(gym.Env):
         self.R_INVALID = -1                    # REDUCED: Much less harsh for wall hits (was -10)
         self.R_WATER_EMPTY = -5                # REDUCED: Less harsh (was -5)
         self.R_STEP = -0.01                    # REDUCED: Tiny step penalty (was -0.05)
-        self.R_EXPLORATION = 10                # REDUCED: More realistic (was 50)
+        self.R_EXPLORATION = 150                # REDUCED: More realistic (was 50)
         self.R_REVISIT = -0.05                 # REDUCED: Minimal penalty (was -0.1)
         self.R_COMPLETE_EXPLORATION = 500      # Bonus for completing exploration
         
@@ -391,7 +391,7 @@ class PlantOSEnv(gym.Env):
         thirsty_count = sum(self.plants.values())
         hydrated_count = len(self.plants) - thirsty_count
         explored_cells = np.sum(self.explored_map > 0)
-        total_cells = self.grid_size * self.grid_size
+        total_cells = self.grid_size * self.grid_size - len(self.obstacles)
         
         return {
             'rover_position': self.rover_pos,
