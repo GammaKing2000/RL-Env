@@ -7,9 +7,9 @@ from typing import Tuple, Dict, Any, Optional
 import os
 import math
 from plantos_utils import print_reset_info, print_step_info, print_episode_summary
-from plantos_3d_viewer import PlantOS3DViewer
+from plantos_3d_viewer_new import PlantOS3DViewer
 
-class PlantOSEnv(gym.Env):
+class PlantOSEnvNew(gym.Env):
     # Observation Channels
     OBSTACLE_CHANNEL = 0
     PLANT_CHANNEL = 1
@@ -33,7 +33,8 @@ class PlantOSEnv(gym.Env):
     
     def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, 
                  lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.7,
-                 observation_mode: str = "grid", render_mode: Optional[str] = None):
+                 observation_mode: str = "grid", render_mode: Optional[str] = None,
+                 map_generation_algo: str = 'original'):
         """
         Initialize the PlantOS environment.
         
@@ -44,6 +45,7 @@ class PlantOSEnv(gym.Env):
             lidar_range: Range of LIDAR sensor in grid cells
             lidar_channels: Number of LIDAR channels for sensing
             thirsty_plant_prob: Probability of a plant being thirsty at reset
+            map_generation_algo: Algorithm for map generation ('original', 'maze', 'rooms', 'border')
         """
         super().__init__()
         
@@ -56,6 +58,7 @@ class PlantOSEnv(gym.Env):
         self.thirsty_plant_prob = thirsty_plant_prob
         self.observation_mode = observation_mode
         self.render_mode = render_mode
+        self.map_generation_algo = map_generation_algo
         
         # Action space: 0=North, 1=East, 2=South, 3=West, 4=Water
         self.action_space = spaces.Discrete(5)
@@ -188,6 +191,9 @@ class PlantOSEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
         
+        # Add watering action flag to info dictionary
+        info['is_watering'] = (action == 4)
+        
         # Check if episode should terminate
         terminated = self._is_episode_done(info)
         truncated = self.step_count >= self.max_steps
@@ -196,12 +202,6 @@ class PlantOSEnv(gym.Env):
         if info['exploration_percentage'] >= 100 and not self.completion_bonus_given:
             reward += self.R_COMPLETE_EXPLORATION
             self.completion_bonus_given = True
-        
-        # --- DEBUG: print step summary  ---
-        #print(f"[DEBUG] Step {self.step_count:4d} | Pos {self.rover_pos} | "
-            #f"Act {action} | Rew {reward:.2f} | "
-            #f"Expl {info['exploration_percentage']:.1f}% | "
-           # f"Term={terminated} Trunc={truncated}")
         
         return observation, reward, terminated, truncated, info
     
@@ -222,83 +222,49 @@ class PlantOSEnv(gym.Env):
         # Calculate new position
         new_x = self.rover_pos[0] + dx
         new_y = self.rover_pos[1] + dy
-
-          # --- DEBUG: show the attempted move ---
-        #print(f"[DEBUG] Move action {action}: old {self.rover_pos} -> cand ({new_x}, {new_y})")
         
         # Check if new position is valid (within bounds and not an obstacle)
         if (0 <= new_x < self.grid_size and
             0 <= new_y < self.grid_size and
             (new_x, new_y) not in self.obstacles):
             
-            # CRITICAL FIX: Check if this cell has EVER been visited
             was_never_visited = self.visit_counts[new_x, new_y] == 0
             
-            # Mark old position as explored
             self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 1
-            
-            # Move rover
             self.rover_pos = (new_x, new_y)
-            
-            # Mark new position as current
             self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 2
-            
-            # Update visit count
             self.visit_counts[new_x, new_y] += 1
-
-            # --- DEBUG: confirm move happened ---
-            #print(f"[DEBUG]    MOVED to {self.rover_pos} | visits={self.visit_counts[new_x, new_y]}")
             
-            # FIXED: Reward ONLY for first-time visits
             if was_never_visited:
-                # First time visiting this cell - give exploration bonus
                 return self.R_EXPLORATION
             else:
-                # Revisiting - just give small penalty to discourage backtracking
                 return self.R_REVISIT
         else:
-            # Invalid movement (hit wall or obstacle)
             self.collided_with_wall = True
             self.total_collisions += 1
-            # --- DEBUG: blocked move ---
-            #print(f"[DEBUG]    BLOCKED at {self.rover_pos} (hit wall/obstacle/bounds)")
             return self.R_INVALID
     
     def _handle_watering(self) -> float:
         """Handle the watering action and return the reward."""
-        # Check if rover is on a plant
         if self.rover_pos in self.plants:
-            plant_status = self.plants[self.rover_pos]
-            if plant_status:  # Plant is thirsty
-                # Water the plant successfully
+            if self.plants[self.rover_pos]:  # Plant is thirsty
                 self.plants[self.rover_pos] = False
                 return self.R_GOAL
             else:  # Plant is already hydrated
                 return self.R_MISTAKE
         else:
-            # Watering empty space
             return self.R_WATER_EMPTY
     
     def _initialize_exploration(self):
         """Initialize the exploration map and ground truth map."""
-        # Create ground truth map
         self.ground_truth_map = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
-        
-        # Mark obstacles
         for obs_x, obs_y in self.obstacles:
             self.ground_truth_map[obs_x, obs_y] = 1.0
-        
-        # Mark plants
         for (plant_x, plant_y) in self.plants.keys():
             self.ground_truth_map[plant_x, plant_y] = 0.5
         
-        # Initialize explored map (all unexplored initially)
         self.explored_map = np.zeros((self.grid_size, self.grid_size), dtype=np.int8)
-        
-        # Mark initial rover position as explored
         self.explored_map[self.rover_pos[0], self.rover_pos[1]] = 2
-        
-        # Initialize LIDAR
         self._update_lidar()
     
     def _update_lidar(self):
@@ -308,10 +274,7 @@ class PlantOSEnv(gym.Env):
     
     def _is_episode_done(self, info: Dict[str, Any]) -> bool:
         """Check if the episode should terminate."""
-        fully_explored = info['exploration_percentage'] >= 100
-        # REMOVED: Wall collision termination - too harsh for exploration!
-        # The agent should be allowed to bump into walls without episode ending
-        return bool(fully_explored)
+        return bool(info['exploration_percentage'] >= 100)
     
     def _get_obs(self) -> np.ndarray:
         """Generate the LIDAR-based observation array."""
@@ -319,7 +282,6 @@ class PlantOSEnv(gym.Env):
     
     def _get_lidar_obs(self) -> np.ndarray:
         """Generate the LIDAR-based observation array with one-hot encoding for entity types."""
-        # Calculate total observation size
         lidar_size = self.lidar_channels * self.observation_space_per_channel
         position_size = 2
         visit_map_size = self.visit_map_cells
@@ -328,23 +290,19 @@ class PlantOSEnv(gym.Env):
         obs = np.zeros(total_size, dtype=np.float32)
         rover_x, rover_y = self.rover_pos
         
-        # ===== LIDAR OBSERVATIONS =====
         for i in range(self.lidar_channels):
             angle = (2 * math.pi * i) / self.lidar_channels
             distance = self.lidar_range
             entity_type = self.ENTITY_EMPTY
             
-            # Ray-march out to the LIDAR range
             for r in range(1, self.lidar_range + 1):
                 dx = int(r * math.cos(angle))
                 dy = int(r * math.sin(angle))
-                check_x = rover_x + dx
-                check_y = rover_y + dy
+                check_x, check_y = rover_x + dx, rover_y + dy
                 
-                # Check if we hit something
                 if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
                     distance = r
-                    entity_type = self.ENTITY_OBSTACLE  # Wall is like an obstacle
+                    entity_type = self.ENTITY_OBSTACLE
                     break
                 
                 pos = (check_x, check_y)
@@ -354,47 +312,30 @@ class PlantOSEnv(gym.Env):
                     break
                 elif pos in self.plants:
                     distance = r
-                    # CRITICAL: Check current plant status from self.plants dict
                     entity_type = self.ENTITY_PLANT_THIRSTY if self.plants[pos] else self.ENTITY_PLANT_HYDRATED
                     break
             
-            # Populate the observation vector for this channel
             start_index = i * self.observation_space_per_channel
-            
-            # 1. Normalized distance
             obs[start_index] = distance / self.lidar_range
-            
-            # 2. One-hot encoded entity type
             one_hot_type = np.zeros(4, dtype=np.float32)
             one_hot_type[entity_type] = 1.0
             obs[start_index + 1 : start_index + 5] = one_hot_type
         
-        # ===== ROVER POSITION =====
         position_start = lidar_size
-        obs[position_start] = rover_x / self.grid_size      # Normalized x position
-        obs[position_start + 1] = rover_y / self.grid_size  # Normalized y position
+        obs[position_start] = rover_x / self.grid_size
+        obs[position_start + 1] = rover_y / self.grid_size
         
-        # ===== LOCAL VISIT MAP (5x5 grid around rover) =====
         visit_map_start = lidar_size + position_size
         visit_map = np.zeros(self.visit_map_cells, dtype=np.float32)
-        
-        # Extract 5x5 local visit counts centered on rover
-        half_size = self.visit_map_size // 2  # 2 for 5x5
+        half_size = self.visit_map_size // 2
         for local_x in range(self.visit_map_size):
             for local_y in range(self.visit_map_size):
-                # Convert local coordinates to global grid coordinates
-                global_x = rover_x + (local_x - half_size)
-                global_y = rover_y + (local_y - half_size)
-                
-                # Check if within grid bounds
+                global_x, global_y = rover_x + (local_x - half_size), rover_y + (local_y - half_size)
                 if 0 <= global_x < self.grid_size and 0 <= global_y < self.grid_size:
-                    # Normalize visit count (cap at 10 visits, then normalize to [0, 1])
                     visit_count = min(self.visit_counts[global_x, global_y], 10) / 10.0
                     visit_map[local_x * self.visit_map_size + local_y] = visit_count
                 else:
-                    # Out of bounds = treat as "fully explored" (visited)
                     visit_map[local_x * self.visit_map_size + local_y] = 1.0
-        
         obs[visit_map_start:visit_map_start + self.visit_map_cells] = visit_map
         
         return obs
@@ -402,14 +343,13 @@ class PlantOSEnv(gym.Env):
     def _get_info(self) -> Dict[str, Any]:
         """Get diagnostic information about the environment."""
         thirsty_count = sum(self.plants.values())
-        hydrated_count = len(self.plants) - thirsty_count
         explored_cells = np.sum(self.explored_map > 0)
         total_cells = self.grid_size * self.grid_size - len(self.obstacles)
         
         return {
             'rover_position': self.rover_pos,
             'thirsty_plants': thirsty_count,
-            'hydrated_plants': hydrated_count,
+            'hydrated_plants': len(self.plants) - thirsty_count,
             'total_plants': len(self.plants),
             'step_count': self.step_count,
             'explored_cells': explored_cells,
@@ -422,20 +362,23 @@ class PlantOSEnv(gym.Env):
         }
     
     def _generate_map(self):
+        """Dispatches the map generation to the selected algorithm."""
+        if self.map_generation_algo == 'maze':
+            self._generate_map_maze()
+        elif self.map_generation_algo == 'rooms':
+            self._generate_map_rooms()
+        elif self.map_generation_algo == 'border':
+            self._generate_map_border()
+        else: # Default to 'original'
+            self._generate_map_original()
+
+    def _generate_map_original(self):
         """
         Generate an open environment with randomly scattered obstacles.
         This is much better for exploration learning than narrow mazes.
         """
         # Start with empty grid
         self.obstacles = set()
-        
-        # Add border walls (optional - can remove for even more openness)
-        # for x in range(self.grid_size):
-        #     self.obstacles.add((x, 0))
-        #     self.obstacles.add((x, self.grid_size - 1))
-        # for y in range(self.grid_size):
-        #     self.obstacles.add((0, y))
-        #     self.obstacles.add((self.grid_size - 1, y))
         
         # Generate random obstacle clusters (more natural than single cells)
         num_obstacle_clusters = self.num_obstacles // 3  # Create clusters instead of individual obstacles
@@ -476,15 +419,200 @@ class PlantOSEnv(gym.Env):
         
         # Place rover in a random available position
         self.rover_pos = random.choice(list(available_positions))
-    
-    # Keep all render methods and close method unchanged
+
+    def _generate_map_maze(self):
+        """
+        Generates a maze with wide corridors using a Recursive Backtracking algorithm on a downscaled grid.
+        """
+        # The 'scale' determines the width of corridors and walls.
+        # A larger scale means wider paths and thicker walls.
+        scale = random.randint(3, 7)
+        
+        small_grid_size_x = self.grid_size // scale
+        small_grid_size_y = self.grid_size // scale
+
+        # 1. Generate a standard perfect maze on the smaller grid.
+        # Using a set to store the locations of paths for efficiency.
+        small_paths = set()
+        
+        start_x = random.randint(0, small_grid_size_x - 1)
+        start_y = random.randint(0, small_grid_size_y - 1)
+
+        stack = [(start_x, start_y)]
+        small_paths.add((start_x, start_y))
+
+        while stack:
+            cx, cy = stack[-1]
+            
+            possible_moves = []
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]: # N, S, E, W
+                # Look for a neighbor 2 cells away
+                nx, ny = cx + dx * 2, cy + dy * 2
+                
+                # Check if neighbor is within bounds and not yet a path
+                if (0 <= nx < small_grid_size_x and 0 <= ny < small_grid_size_y and
+                    (nx, ny) not in small_paths):
+                    possible_moves.append((nx, ny, dx, dy))
+            
+            if possible_moves:
+                nx, ny, dx, dy = random.choice(possible_moves)
+                
+                # Carve path to neighbor, including the wall in between
+                wall_between_x, wall_between_y = cx + dx, cy + dy
+                small_paths.add((wall_between_x, wall_between_y))
+                small_paths.add((nx, ny))
+                
+                stack.append((nx, ny))
+            else:
+                # Backtrack
+                stack.pop()
+
+        # 2. Scale up the maze to the full grid size.
+        # If a cell in the small grid is NOT a path, it's a wall.
+        self.obstacles = set()
+        for x in range(self.grid_size):
+            for y in range(self.grid_size):
+                small_x = x // scale
+                small_y = y // scale
+                if (small_x, small_y) not in small_paths:
+                    self.obstacles.add((x, y))
+
+        # Place plants and rover in the carved-out paths
+        available_positions = set(
+            (x, y) for x in range(self.grid_size) for y in range(self.grid_size)
+        ) - self.obstacles
+
+        if len(available_positions) < self.num_plants + 1:
+            # Fallback if maze generation is too restrictive for plants/rover
+            print("Warning: Not enough space in the maze for plants and rover. Falling back to original map generation.")
+            self._generate_map_original()
+            return
+
+        plant_positions = random.sample(list(available_positions), self.num_plants)
+        for pos in plant_positions:
+            self.plants[pos] = random.random() < self.thirsty_plant_prob
+        available_positions -= set(plant_positions)
+        self.rover_pos = random.choice(list(available_positions))
+
+    def _generate_map_rooms(self):
+        """
+        Generates a map with multiple rooms connected by corridors.
+        """
+        self.obstacles = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size))
+        rooms = []
+        
+        num_rooms = random.randint(5, 10)
+        
+        for _ in range(num_rooms):
+            w = random.randint(4, 8)
+            h = random.randint(4, 8)
+            x = random.randint(1, self.grid_size - w - 1)
+            y = random.randint(1, self.grid_size - h - 1)
+            
+            new_room = pygame.Rect(x, y, w, h)
+            
+            # Check for intersections with existing rooms
+            is_overlapping = False
+            for other_room in rooms:
+                if new_room.colliderect(other_room.inflate(2, 2)): # Inflate to add padding
+                    is_overlapping = True
+                    break
+            
+            if not is_overlapping:
+                rooms.append(new_room)
+
+        # Carve out the rooms
+        for room in rooms:
+            for i in range(room.left, room.right):
+                for j in range(room.top, room.bottom):
+                    self.obstacles.discard((j, i)) # grid is (row, col) -> (y, x)
+
+        # Connect the rooms with corridors
+        for i in range(len(rooms) - 1):
+            x1, y1 = rooms[i].center
+            x2, y2 = rooms[i+1].center
+
+            # Horizontal corridor
+            for x in range(min(x1, x2), max(x1, x2) + 1):
+                self.obstacles.discard((y1, x))
+            # Vertical corridor
+            for y in range(min(y1, y2), max(y1, y2) + 1):
+                self.obstacles.discard((y, x2))
+
+        # Place plants and rover in the carved-out paths
+        available_positions = set(
+            (x, y) for x in range(self.grid_size) for y in range(self.grid_size)
+        ) - self.obstacles
+
+        if len(available_positions) < self.num_plants + 1:
+            print("Warning: Not enough space in rooms for plants/rover. Falling back to original.")
+            self._generate_map_original()
+            return
+
+        plant_positions = random.sample(list(available_positions), self.num_plants)
+        for pos in plant_positions:
+            self.plants[pos] = random.random() < self.thirsty_plant_prob
+        available_positions -= set(plant_positions)
+        self.rover_pos = random.choice(list(available_positions))
+
+    def _generate_map_border(self):
+        """
+        Generates an open map with a border of obstacles.
+        """
+        self.obstacles = set()
+        # Add border obstacles
+        for i in range(self.grid_size):
+            self.obstacles.add((i, 0))
+            self.obstacles.add((i, self.grid_size - 1))
+            self.obstacles.add((0, i))
+            self.obstacles.add((self.grid_size - 1, i))
+
+        # Get all available positions (not obstacles)
+        available_positions = set(
+            (x, y) for x in range(1, self.grid_size - 1) for y in range(1, self.grid_size - 1)
+        )
+
+        if len(available_positions) < self.num_plants + 1:
+            raise ValueError("Not enough space for plants and rover in bordered map.")
+        
+        # Place plants randomly
+        plant_positions = random.sample(list(available_positions), self.num_plants)
+        for plant_pos in plant_positions:
+            is_thirsty = random.random() < self.thirsty_plant_prob
+            self.plants[plant_pos] = is_thirsty
+        available_positions -= set(plant_positions)
+        
+        # Place rover in a random available position
+        self.rover_pos = random.choice(list(available_positions))
+
     def render(self):
-        """Render the environment using Pygame (2D) and/or Ursina (3D)."""
-        if self.render_mode in ['2d', 'human']:
-            self._render_2d()
-        if self.render_mode in ['3d', 'human']:
-            self._render_3d()
-    
+        """Render the environment based on the render_mode."""
+        if self.render_mode == 'human':
+            if self.window is None:
+                pygame.init()
+                self.window = pygame.display.set_mode((self.grid_size * self.cell_size, self.grid_size * self.cell_size))
+                pygame.display.set_caption("PlantOS Environment")
+                self.clock = pygame.time.Clock()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.close()
+                    return
+
+            frame = self._render_frame()
+            self.window.blit(frame, (0, 0))
+            pygame.display.flip()
+            self.clock.tick(30)
+            
+            if self.viewer_3d is None:
+                self._render_3d() # Initialize 3D viewer
+            
+            return None
+
+        elif self.render_mode == 'rgb_array':
+            frame = self._render_frame()
+            return np.transpose(pygame.surfarray.array3d(frame), axes=(1, 0, 2))
+
     def _render_3d(self):
         """Handles the Ursina 3D rendering."""
         if self.viewer_3d is None:
@@ -499,149 +627,120 @@ class PlantOSEnv(gym.Env):
         }
         self.viewer_3d.update_scene(self.plants, self.rover_pos, stats)
         self.viewer_3d.render_step()
-    
-    def _render_2d(self):
-        """Handles the Pygame 2D rendering."""
-        if self.window is None:
+
+    def _load_assets(self):
+        """Load all Pygame assets."""
+        if hasattr(self, '_assets_loaded') and self._assets_loaded:
+            return
+            
+        assets_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        def get_asset_path(filename):
+            # Helper to check for assets in the parent directory as a fallback
+            local_path = os.path.join(assets_dir, filename)
+            parent_path = os.path.join(assets_dir, '..', filename)
+            if os.path.exists(local_path):
+                return local_path
+            elif os.path.exists(parent_path):
+                return parent_path
+            return None
+
+        asset_paths = {
+            'background': get_asset_path('grass_texture.png'),
+            'obstacle': get_asset_path('obstacles_texture.png'),
+            'rover': get_asset_path('mech_drone_agent.png'),
+            'plant_thirsty': get_asset_path('dry_plant_bg.png'),
+            'plant_hydrated': get_asset_path('good_plant_bg.png')
+        }
+
+        try: self.background_img = pygame.image.load(asset_paths['background']) if asset_paths['background'] else None
+        except: self.background_img = None
+        if self.background_img: self.background_img = pygame.transform.scale(self.background_img, (self.cell_size, self.cell_size))
+        
+        try: self.obstacle_img = pygame.image.load(asset_paths['obstacle']) if asset_paths['obstacle'] else None
+        except: self.obstacle_img = None
+        if self.obstacle_img: self.obstacle_img = pygame.transform.scale(self.obstacle_img, (self.cell_size, self.cell_size))
+
+        try: self.rover_img = pygame.image.load(asset_paths['rover']) if asset_paths['rover'] else None
+        except: self.rover_img = None
+        if self.rover_img: self.rover_img = pygame.transform.scale(self.rover_img, (self.cell_size, self.cell_size))
+
+        try: self.plant_thirsty_img = pygame.image.load(asset_paths['plant_thirsty']) if asset_paths['plant_thirsty'] else None
+        except: self.plant_thirsty_img = None
+        if self.plant_thirsty_img: self.plant_thirsty_img = pygame.transform.scale(self.plant_thirsty_img, (self.cell_size, self.cell_size))
+
+        try: self.plant_hydrated_img = pygame.image.load(asset_paths['plant_hydrated']) if asset_paths['plant_hydrated'] else None
+        except: self.plant_hydrated_img = None
+        if self.plant_hydrated_img: self.plant_hydrated_img = pygame.transform.scale(self.plant_hydrated_img, (self.cell_size, self.cell_size))
+        
+        self._assets_loaded = True
+
+    def _render_frame(self) -> pygame.Surface:
+        """Render the current state to a Pygame surface."""
+        if not pygame.get_init():
             pygame.init()
-            self.window = pygame.display.set_mode((self.grid_size * self.cell_size, self.grid_size * self.cell_size))
-            pygame.display.set_caption("PlantOS Environment")
-            self.clock = pygame.time.Clock()
-            
-            # Load images if available, otherwise use colored rectangles
-            assets_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            try:
-                self.background_img = pygame.image.load(os.path.join(assets_dir, 'grass_texture.png'))
-                self.background_img = pygame.transform.scale(self.background_img, (self.cell_size, self.cell_size))
-            except:
-                self.background_img = None
-            
-            try:
-                self.obstacle_img = pygame.image.load(os.path.join(assets_dir, 'obstacles_texture.png'))
-                self.obstacle_img = pygame.transform.scale(self.obstacle_img, (self.cell_size, self.cell_size))
-            except:
-                self.obstacle_img = None
-            
-            try:
-                self.rover_img = pygame.image.load(os.path.join(assets_dir, 'mech_drone_agent.png'))
-                self.rover_img = pygame.transform.scale(self.rover_img, (self.cell_size, self.cell_size))
-            except:
-                self.rover_img = None
-            
-            try:
-                self.plant_thirsty_img = pygame.image.load(os.path.join(assets_dir, 'dry_plant_bg.png'))
-                self.plant_thirsty_img = pygame.transform.scale(self.plant_thirsty_img, (self.cell_size, self.cell_size))
-            except:
-                self.plant_thirsty_img = None
-            
-            try:
-                self.plant_hydrated_img = pygame.image.load(os.path.join(assets_dir, 'good_plant_bg.png'))
-                self.plant_hydrated_img = pygame.transform.scale(self.plant_hydrated_img, (self.cell_size, self.cell_size))
-            except:
-                self.plant_hydrated_img = None
         
-        # Handle pygame events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.close()
-                return
+        self._load_assets()
         
-        # Draw background
+        canvas = pygame.Surface((self.grid_size * self.cell_size, self.grid_size * self.cell_size))
+        
         for x in range(self.grid_size):
             for y in range(self.grid_size):
                 rect = pygame.Rect(y * self.cell_size, x * self.cell_size, self.cell_size, self.cell_size)
-                if self.background_img:
-                    self.window.blit(self.background_img, rect)
-                else:
-                    pygame.draw.rect(self.window, (34, 139, 34), rect)  # Green
-        
-        # Draw explored areas (semi-transparent overlay)
-        explored_surface = pygame.Surface((self.grid_size * self.cell_size, self.grid_size * self.cell_size))
-        explored_surface.set_alpha(100)
+                if self.background_img: canvas.blit(self.background_img, rect)
+                else: pygame.draw.rect(canvas, (34, 139, 34), rect)
+
+        explored_surface = pygame.Surface((self.grid_size * self.cell_size, self.grid_size * self.cell_size), pygame.SRCALPHA)
         for x in range(self.grid_size):
             for y in range(self.grid_size):
                 if self.explored_map[x, y] > 0:
                     rect = pygame.Rect(y * self.cell_size, x * self.cell_size, self.cell_size, self.cell_size)
-                    pygame.draw.rect(explored_surface, (200, 200, 200), rect)
-        self.window.blit(explored_surface, (0, 0))
+                    pygame.draw.rect(explored_surface, (200, 200, 200, 100), rect)
+        canvas.blit(explored_surface, (0, 0))
         
-        # Draw obstacles
         for obs_x, obs_y in self.obstacles:
             rect = pygame.Rect(obs_y * self.cell_size, obs_x * self.cell_size, self.cell_size, self.cell_size)
-            if self.obstacle_img:
-                self.window.blit(self.obstacle_img, rect)
-            else:
-                pygame.draw.rect(self.window, (105, 105, 105), rect)  # Gray
+            if self.obstacle_img: canvas.blit(self.obstacle_img, rect)
+            else: pygame.draw.rect(canvas, (105, 105, 105), rect)
         
-        # Draw plants
         for (plant_x, plant_y), is_thirsty in self.plants.items():
             rect = pygame.Rect(plant_y * self.cell_size, plant_x * self.cell_size, self.cell_size, self.cell_size)
-            if is_thirsty:
-                if self.plant_thirsty_img:
-                    self.window.blit(self.plant_thirsty_img, rect)
-                else:
-                    pygame.draw.rect(self.window, (255, 165, 0), rect)  # Orange
-            else:
-                if self.plant_hydrated_img:
-                    self.window.blit(self.plant_hydrated_img, rect)
-                else:
-                    pygame.draw.rect(self.window, (0, 255, 0), rect)  # Bright green
+            img = self.plant_thirsty_img if is_thirsty else self.plant_hydrated_img
+            color = (255, 165, 0) if is_thirsty else (0, 255, 0)
+            if img: canvas.blit(img, rect)
+            else: pygame.draw.rect(canvas, color, rect)
         
-        # Draw LIDAR rays
-        rover_x, rover_y = self.rover_pos
-        rover_center_x = rover_y * self.cell_size + self.cell_size // 2
-        rover_center_y = rover_x * self.cell_size + self.cell_size // 2
-        
-        for i in range(self.lidar_channels):
-            angle = (2 * math.pi * i) / self.lidar_channels
+        if self.rover_pos:
+            rover_x, rover_y = self.rover_pos
+            rover_center_x = rover_y * self.cell_size + self.cell_size // 2
+            rover_center_y = rover_x * self.cell_size + self.cell_size // 2
             
-            # Find where the ray hits
-            hit_distance = self.lidar_range
-            for r in range(1, self.lidar_range + 1):
-                dx = int(r * math.cos(angle))
-                dy = int(r * math.sin(angle))
-                check_x = rover_x + dx
-                check_y = rover_y + dy
+            for i in range(self.lidar_channels):
+                angle = (2 * math.pi * i) / self.lidar_channels
+                hit_distance = self.lidar_range
+                for r in range(1, self.lidar_range + 1):
+                    dx, dy = int(r * math.cos(angle)), int(r * math.sin(angle))
+                    check_x, check_y = rover_x + dx, rover_y + dy
+                    if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
+                        hit_distance = r; break
+                    if (check_x, check_y) in self.obstacles or (check_x, check_y) in self.plants:
+                        hit_distance = r; break
                 
-                # Check if we hit something
-                if not (0 <= check_x < self.grid_size and 0 <= check_y < self.grid_size):
-                    hit_distance = r
-                    break
-                
-                pos = (check_x, check_y)
-                if pos in self.obstacles or pos in self.plants:
-                    hit_distance = r
-                    break
-            
-            # Draw the LIDAR ray
-            end_x = rover_center_x + int(hit_distance * self.cell_size * math.sin(angle))
-            end_y = rover_center_y + int(hit_distance * self.cell_size * math.cos(angle))
-            
-            # Color rays based on what they detect
-            ray_color = (100, 100, 255)  # Default blue for empty space
-            
-            pygame.draw.line(self.window, ray_color, 
-                           (rover_center_x, rover_center_y), 
-                           (end_x, end_y), 1)
-            
-            # Draw a small circle at the hit point
-            pygame.draw.circle(self.window, ray_color, (end_x, end_y), 2)
+                end_x = rover_center_x + int(hit_distance * self.cell_size * math.sin(angle))
+                end_y = rover_center_y + int(hit_distance * self.cell_size * math.cos(angle))
+                pygame.draw.line(canvas, (100, 100, 255), (rover_center_x, rover_center_y), (end_x, end_y), 1)
+                pygame.draw.circle(canvas, (100, 100, 255), (end_x, end_y), 2)
         
-        # Draw rover (on top of LIDAR rays)
-        rect = pygame.Rect(rover_y * self.cell_size, rover_x * self.cell_size, self.cell_size, self.cell_size)
-        if self.rover_img:
-            self.window.blit(self.rover_img, rect)
-        else:
-            pygame.draw.rect(self.window, (0, 0, 255), rect)  # Blue
+        if self.rover_pos:
+            rect = pygame.Rect(self.rover_pos[1] * self.cell_size, self.rover_pos[0] * self.cell_size, self.cell_size, self.cell_size)
+            if self.rover_img: canvas.blit(self.rover_img, rect)
+            else: pygame.draw.rect(canvas, (0, 0, 255), rect)
         
-        # Draw grid lines
         for x in range(self.grid_size + 1):
-            pygame.draw.line(self.window, (200, 200, 200), (0, x * self.cell_size), (self.grid_size * self.cell_size, x * self.cell_size), 1)
-            pygame.draw.line(self.window, (200, 200, 200), (x * self.cell_size, 0), (x * self.cell_size, self.grid_size * self.cell_size), 1)
-        
-        pygame.display.flip()
-        self.clock.tick(30)  # 30 FPS
+            pygame.draw.line(canvas, (200, 200, 200), (0, x * self.cell_size), (self.grid_size * self.cell_size, x * self.cell_size), 1)
+            pygame.draw.line(canvas, (200, 200, 200), (x * self.cell_size, 0), (x * self.cell_size, self.grid_size * self.cell_size), 1)
+            
+        return canvas
     
     def close(self):
         """Close the environment and clean up resources."""
@@ -655,5 +754,5 @@ class PlantOSEnv(gym.Env):
 # Register the environment with Gymnasium
 gym.register(
     id='PlantOS-v0',
-    entry_point='plantos_env:PlantOSEnv',
+    entry_point='plantos_env:PlantOSEnvNew',
 )

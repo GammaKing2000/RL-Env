@@ -1,5 +1,6 @@
 import gymnasium as gym
 from sb3_contrib import RecurrentPPO
+import torch
 from stable_baselines3 import DQN
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.monitor import Monitor
@@ -144,27 +145,32 @@ def train_with_recurrent_ppo(n_envs=4):
     print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
+    # Set device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
+
     # Create RecurrentPPO model with LSTM
     model = RecurrentPPO(
         "MlpLstmPolicy",
         env,
         learning_rate=3e-4,           # Standard learning rate for PPO
-        n_steps=2048,                 # Steps per environment before update
-        batch_size=64,                # Minibatch size
+        n_steps=1024,                 # Steps per environment before update
+        batch_size=128,                # Minibatch size
         n_epochs=10,                  # Number of epochs when optimizing
         gamma=0.99,                   # Discount factor
         gae_lambda=0.95,              # GAE lambda for advantage estimation
         clip_range=0.2,               # Clipping parameter
-        ent_coef=0.01,                # Entropy coefficient for exploration
+        ent_coef=0.02,                # Entropy coefficient for exploration
         vf_coef=0.5,                  # Value function coefficient
         max_grad_norm=0.5,            # Max gradient norm
         verbose=1,
         tensorboard_log=f"{log_dir}tensorboard/",
+        device=device,
         policy_kwargs=dict(
-            lstm_hidden_size=512,     # INCREASED: 512 for better memory (was 256)
-            n_lstm_layers=2,          # INCREASED: 2 layers for deeper memory (was 1)
+            lstm_hidden_size=2562,     # INCREASED: 512 for better memory (was 256)
+            n_lstm_layers=1,          # INCREASED: 2 layers for deeper memory (was 1)
             enable_critic_lstm=True,  # Use LSTM for critic too
-            net_arch=[256, 256],      # Additional feedforward layers before LSTM
+            net_arch=[128, 128],      # Additional feedforward layers before LSTM
         )
     )
     
@@ -180,7 +186,7 @@ def train_with_recurrent_ppo(n_envs=4):
     
     # Train the model
     print("\nStarting training...")
-    total_timesteps = 2000000  # Train MUCH longer for proper learning
+    total_timesteps = 100000  # Train MUCH longer for proper learning
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, eval_callback],
@@ -237,6 +243,10 @@ def train_with_improved_dqn(n_envs=4):
     print("WITH CURRICULUM LEARNING (same maze until 100% explored)")
     print("=" * 50)
     
+    # Set device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
+
     # Create DQN model with FIXED hyperparameters for exploration
     model = DQN(
     "MlpPolicy",
@@ -255,6 +265,7 @@ def train_with_improved_dqn(n_envs=4):
     exploration_final_eps=0.05,      # Minimum 5% exploration
     max_grad_norm=10.0,
     verbose=1,
+    device=device,
     policy_kwargs=dict(
         net_arch=[512, 512, 256]     # LARGER network - better capacity
         )
@@ -429,14 +440,18 @@ def test_trained_model(model_path, num_episodes=5):
     # This ensures visit counts persist and agent behavior matches training
     env = CurriculumWrapper(env, initial_threshold=100.0, max_threshold=100.0)
     
+    # Set device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
+
     # Load model
     # Use RecurrentPPO.load() or DQN.load() depending on which you trained
     try:
-        model = RecurrentPPO.load(model_path)
+        model = RecurrentPPO.load(model_path, device=device)
         print("Loaded RecurrentPPO model")
         use_lstm = True
     except:
-        model = DQN.load(model_path)
+        model = DQN.load(model_path, device=device)
         print("Loaded DQN model")
         use_lstm = False
     
