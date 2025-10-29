@@ -101,6 +101,16 @@ class PlantOSEnv(gym.Env):
         # self.R_EXPLORATION = 10
         # self.R_REVISIT = -1
         # self.R_COMPLETE_EXPLORATION = 50
+
+        # Rewards for RecurrentPPO - avg_exploration ~ 84%, 3mil steps, with curriculum learning, 128 n_env, 120 minutes, plants are watered but only when encountered, gets stuck towrds the end when near obstacles
+        # self.R_GOAL = 50
+        # self.R_MISTAKE = -5
+        # self.R_INVALID = -2
+        # self.R_WATER_EMPTY = -5
+        # self.R_STEP = -0.05
+        # self.R_EXPLORATION = 5
+        # self.R_REVISIT = -0.5
+        # self.R_COMPLETE_EXPLORATION = 200
         
         # Internal state variables
         self.rover_pos = None
