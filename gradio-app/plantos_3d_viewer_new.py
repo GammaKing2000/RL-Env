@@ -1,6 +1,7 @@
-
 from ursina import *
 from ursina import application
+import multiprocessing
+import time
 
 class PlantOS3DViewer:
     """
@@ -17,12 +18,15 @@ class PlantOS3DViewer:
         EditorCamera()
         
         # Scene entities
-        self.ground = None
         self.rover_entity = None
         self.cell_highlighter = None
         self.plant_entities = {}  # Maps (x, y) -> Ursina Entity
         self.obstacle_entities = {} # Maps (x, y) -> Ursina Entity
         self.lidar_lines = []
+
+        # Textures
+        self.rover_texture_default = None
+        self.rover_texture_water = None
 
         # HUD for stats
         self.hud_text = Text(
@@ -40,8 +44,7 @@ class PlantOS3DViewer:
         """
         Creates the initial 3D scene with static and dynamic objects.
         """
-        # Create the ground plane
-        grass_texture = 'assets/grass_texture.png' if os.path.exists('assets/grass_texture.png') else None
+        grass_texture = 'grass_texture.png'
         self.ground = Entity(
             model='plane',
             scale=(self.grid_size * self.cell_size, 1, self.grid_size * self.cell_size),
@@ -50,8 +53,7 @@ class PlantOS3DViewer:
             texture_scale=(self.grid_size, self.grid_size) if grass_texture else None
         )
 
-        # Create obstacles
-        obstacle_texture = 'assets/obstacles_texture.png' if os.path.exists('assets/obstacles_texture.png') else None
+        obstacle_texture = 'obstacles_texture.png'
         for obs_pos in obstacles:
             x, y = obs_pos
             self.obstacle_entities[obs_pos] = Entity(
@@ -62,31 +64,30 @@ class PlantOS3DViewer:
                 scale=(self.cell_size, self.cell_size, self.cell_size)
             )
         
-        # Create initial plants and rover
         self.update_scene(plants, rover_pos)
 
     def update_scene(self, plants: dict, rover_pos: tuple, stats: dict = None):
-        """
-        Updates the 3D scene to reflect the current state of the environment.
-        """
-        # Update HUD
+        
         if stats:
             self.hud_text.text = (
                 f"Timesteps: {stats.get('timesteps', 0)}\n"
                 f"Total Collisions: {stats.get('collisions', 0)}\n"
                 f"Thirsty Plants: {stats.get('thirsty_plants', 0)}"
             )
-        # Update rover
         if self.rover_entity is None:
-            rover_texture = 'assets/mech_drone_agent.png'
+            self.rover_texture_default = 'mech_drone_agent.png'
+            self.rover_texture_water = 'mech_drone_water.png'
             self.rover_entity = Entity(
                 model='quad', 
-                texture=rover_texture if os.path.exists(rover_texture) else None,
-                color=color.blue if not os.path.exists(rover_texture) else color.white,
+                texture=self.rover_texture_default if os.path.exists(self.rover_texture_default) else None,
+                color=color.blue if not os.path.exists(self.rover_texture_default) else color.white,
                 billboard=True, 
                 scale=self.cell_size * 2
             )
         self.rover_entity.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.5)
+
+        if stats and stats.get('is_watering', False):
+            self.trigger_watering_animation()
 
         if self.cell_highlighter is None:
             self.cell_highlighter = Entity(
@@ -97,21 +98,15 @@ class PlantOS3DViewer:
             )
         self.cell_highlighter.position = self._grid_to_world(rover_pos[0], rover_pos[1], 0.05)
 
-
-
-        # Update plants
         current_plant_positions = set(self.plant_entities.keys())
         target_plant_positions = set(plants.keys())
 
-        # Remove plants that no longer exist (e.g. after a reset)
         for pos in current_plant_positions - target_plant_positions:
             destroy(self.plant_entities.pop(pos))
 
-        # Get texture paths
-        thirsty_texture = 'assets/dry_plant_bg.png'
-        hydrated_texture = 'assets/good_plant_bg.png'
+        thirsty_texture = 'dry_plant_bg.png'
+        hydrated_texture = 'good_plant_bg.png'
 
-        # Add new plants or update existing ones
         for pos, is_thirsty in plants.items():
             if pos not in self.plant_entities:
                 self.plant_entities[pos] = Entity(
@@ -123,21 +118,35 @@ class PlantOS3DViewer:
             entity = self.plant_entities[pos]
             entity.position = self._grid_to_world(pos[0], pos[1], 0.5)
             
-            # Set texture or color based on plant state
             if is_thirsty:
                 if os.path.exists(thirsty_texture):
                     entity.texture = thirsty_texture
                     entity.color = color.white
                 else:
                     entity.texture = None
-                    entity.color = color.orange  # Thirsty = orange
+                    entity.color = color.orange
             else:
                 if os.path.exists(hydrated_texture):
                     entity.texture = hydrated_texture
                     entity.color = color.white
                 else:
                     entity.texture = None
-                    entity.color = color.green  # Hydrated = green
+                    entity.color = color.green
+
+    def trigger_watering_animation(self):
+        """Changes texture, rotates for a few seconds, and reverts texture."""
+        if not self.rover_entity:
+            return
+
+        self.rover_entity.animations.clear()
+        self.rover_entity.texture = self.rover_texture_water
+        self.rover_entity.animate('rotation_y', self.rover_entity.rotation_y + 360 * 3, duration=1, curve=curve.linear)
+
+        Sequence(
+            Wait(1.1), # Wait for slightly longer than the animation duration
+            Func(lambda: setattr(self.rover_entity, 'texture', self.rover_texture_default)),
+            Func(lambda: setattr(self.rover_entity, 'rotation', Vec3(0, 0, 0))), # Reset rotation to 0 degrees
+        ).start()
 
     def reset_scene(self):
         """Destroys all entities to prepare for a new scene."""
@@ -178,3 +187,31 @@ class PlantOS3DViewer:
         Closes the Ursina application window.
         """
         application.quit()
+
+def run_3d_viewer_process(update_queue: multiprocessing.Queue, initial_data: dict):
+    """
+    Function to be run in a separate process for the 3D viewer.
+    """
+    viewer = PlantOS3DViewer(grid_size=initial_data['grid_size'])
+    viewer.setup_scene(
+        initial_data['obstacles'],
+        initial_data['plants'],
+        initial_data['rover_pos']
+    )
+    
+    # Run the Ursina app loop
+    while True:
+        if not update_queue.empty():
+            message = update_queue.get()
+            if message == "STOP":
+                break
+            else:
+                viewer.update_scene(
+                    message['plants'],
+                    message['rover_pos'],
+                    message['stats']
+                )
+        viewer.render_step()
+        time.sleep(0.01) # Small delay to prevent busy-waiting
+    
+    viewer.close()
