@@ -45,7 +45,7 @@ class PlantOSEnvNew(gym.Env):
             lidar_range: Range of LIDAR sensor in grid cells
             lidar_channels: Number of LIDAR channels for sensing
             thirsty_plant_prob: Probability of a plant being thirsty at reset
-            map_generation_algo: Algorithm for map generation ('original', 'maze', 'rooms', 'border')
+            map_generation_algo: Algorithm for map generation ('original', 'maze')
         """
         super().__init__()
         
@@ -365,10 +365,6 @@ class PlantOSEnvNew(gym.Env):
         """Dispatches the map generation to the selected algorithm."""
         if self.map_generation_algo == 'maze':
             self._generate_map_maze()
-        elif self.map_generation_algo == 'rooms':
-            self._generate_map_rooms()
-        elif self.map_generation_algo == 'border':
-            self._generate_map_border()
         else: # Default to 'original'
             self._generate_map_original()
 
@@ -422,168 +418,205 @@ class PlantOSEnvNew(gym.Env):
 
     def _generate_map_maze(self):
         """
-        Generates a maze with wide corridors using a Recursive Backtracking algorithm on a downscaled grid.
+        Generate a maze with paths that are at least 5 cells wide and irregular diagonal walls.
         """
-        # The 'scale' determines the width of corridors and walls.
-        # A larger scale means wider paths and thicker walls.
-        scale = random.randint(3, 7)
+        # 1. Start with a grid full of obstacles.
+        self.obstacles = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size))
+
+        # Define a smaller "meta" grid to generate the maze structure
+        # Each cell in the meta-grid corresponds to a 5x5 area in the main grid
+        meta_w = (self.grid_size - 1) // 6
+        meta_h = (self.grid_size - 1) // 6
         
-        small_grid_size_x = self.grid_size // scale
-        small_grid_size_y = self.grid_size // scale
-
-        # 1. Generate a standard perfect maze on the smaller grid.
-        # Using a set to store the locations of paths for efficiency.
-        small_paths = set()
+        # Visited cells in the meta-grid
+        visited = np.zeros((meta_w, meta_h), dtype=bool)
         
-        start_x = random.randint(0, small_grid_size_x - 1)
-        start_y = random.randint(0, small_grid_size_y - 1)
+        # Stack for DFS
+        stack = []
+        
+        # Start carving from a random cell in the meta-grid
+        start_x, start_y = random.randint(0, meta_w - 1), random.randint(0, meta_h - 1)
+        stack.append((start_x, start_y))
+        visited[start_x, start_y] = True
+        
+        # Carve out the initial 5x5 area with irregular shape
+        self._carve_irregular_room(start_x, start_y)
 
-        stack = [(start_x, start_y)]
-        small_paths.add((start_x, start_y))
-
+        # Randomized DFS on the meta-grid
         while stack:
             cx, cy = stack[-1]
             
-            possible_moves = []
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]: # N, S, E, W
-                # Look for a neighbor 2 cells away
-                nx, ny = cx + dx * 2, cy + dy * 2
-                
-                # Check if neighbor is within bounds and not yet a path
-                if (0 <= nx < small_grid_size_x and 0 <= ny < small_grid_size_y and
-                    (nx, ny) not in small_paths):
-                    possible_moves.append((nx, ny, dx, dy))
+            # Get unvisited neighbors (including diagonal)
+            neighbors = []
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < meta_w and 0 <= ny < meta_h and not visited[nx, ny]:
+                    neighbors.append((nx, ny, dx, dy))
             
-            if possible_moves:
-                nx, ny, dx, dy = random.choice(possible_moves)
+            if neighbors:
+                # Choose a random neighbor
+                nx, ny, dx, dy = random.choice(neighbors)
                 
-                # Carve path to neighbor, including the wall in between
-                wall_between_x, wall_between_y = cx + dx, cy + dy
-                small_paths.add((wall_between_x, wall_between_y))
-                small_paths.add((nx, ny))
+                # Carve path to neighbor with irregular shape
+                self._carve_irregular_path(cx, cy, nx, ny, dx, dy)
                 
+                # Carve out the new room at the destination
+                self._carve_irregular_room(nx, ny)
+
+                visited[nx, ny] = True
                 stack.append((nx, ny))
             else:
-                # Backtrack
                 stack.pop()
+        
+        # Add some random diagonal walls for extra irregularity
+        self._add_diagonal_walls()
+        
+        # Randomly place plants
+        available_positions = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size)) - self.obstacles
 
-        # 2. Scale up the maze to the full grid size.
-        # If a cell in the small grid is NOT a path, it's a wall.
-        self.obstacles = set()
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                small_x = x // scale
-                small_y = y // scale
-                if (small_x, small_y) not in small_paths:
-                    self.obstacles.add((x, y))
-
-        # Place plants and rover in the carved-out paths
-        available_positions = set(
-            (x, y) for x in range(self.grid_size) for y in range(self.grid_size)
-        ) - self.obstacles
-
+        # Check if there is enough space for plants and the rover
         if len(available_positions) < self.num_plants + 1:
-            # Fallback if maze generation is too restrictive for plants/rover
             print("Warning: Not enough space in the maze for plants and rover. Falling back to original map generation.")
             self._generate_map_original()
             return
-
-        plant_positions = random.sample(list(available_positions), self.num_plants)
-        for pos in plant_positions:
-            self.plants[pos] = random.random() < self.thirsty_plant_prob
-        available_positions -= set(plant_positions)
-        self.rover_pos = random.choice(list(available_positions))
-
-    def _generate_map_rooms(self):
-        """
-        Generates a map with multiple rooms connected by corridors.
-        """
-        self.obstacles = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size))
-        rooms = []
         
-        num_rooms = random.randint(5, 10)
-        
-        for _ in range(num_rooms):
-            w = random.randint(4, 8)
-            h = random.randint(4, 8)
-            x = random.randint(1, self.grid_size - w - 1)
-            y = random.randint(1, self.grid_size - h - 1)
-            
-            new_room = pygame.Rect(x, y, w, h)
-            
-            # Check for intersections with existing rooms
-            is_overlapping = False
-            for other_room in rooms:
-                if new_room.colliderect(other_room.inflate(2, 2)): # Inflate to add padding
-                    is_overlapping = True
-                    break
-            
-            if not is_overlapping:
-                rooms.append(new_room)
-
-        # Carve out the rooms
-        for room in rooms:
-            for i in range(room.left, room.right):
-                for j in range(room.top, room.bottom):
-                    self.obstacles.discard((j, i)) # grid is (row, col) -> (y, x)
-
-        # Connect the rooms with corridors
-        for i in range(len(rooms) - 1):
-            x1, y1 = rooms[i].center
-            x2, y2 = rooms[i+1].center
-
-            # Horizontal corridor
-            for x in range(min(x1, x2), max(x1, x2) + 1):
-                self.obstacles.discard((y1, x))
-            # Vertical corridor
-            for y in range(min(y1, y2), max(y1, y2) + 1):
-                self.obstacles.discard((y, x2))
-
-        # Place plants and rover in the carved-out paths
-        available_positions = set(
-            (x, y) for x in range(self.grid_size) for y in range(self.grid_size)
-        ) - self.obstacles
-
-        if len(available_positions) < self.num_plants + 1:
-            print("Warning: Not enough space in rooms for plants/rover. Falling back to original.")
-            self._generate_map_original()
-            return
-
-        plant_positions = random.sample(list(available_positions), self.num_plants)
-        for pos in plant_positions:
-            self.plants[pos] = random.random() < self.thirsty_plant_prob
-        available_positions -= set(plant_positions)
-        self.rover_pos = random.choice(list(available_positions))
-
-    def _generate_map_border(self):
-        """
-        Generates an open map with a border of obstacles.
-        """
-        self.obstacles = set()
-        # Add border obstacles
-        for i in range(self.grid_size):
-            self.obstacles.add((i, 0))
-            self.obstacles.add((i, self.grid_size - 1))
-            self.obstacles.add((0, i))
-            self.obstacles.add((self.grid_size - 1, i))
-
-        # Get all available positions (not obstacles)
-        available_positions = set(
-            (x, y) for x in range(1, self.grid_size - 1) for y in range(1, self.grid_size - 1)
-        )
-
-        if len(available_positions) < self.num_plants + 1:
-            raise ValueError("Not enough space for plants and rover in bordered map.")
-        
-        # Place plants randomly
         plant_positions = random.sample(list(available_positions), self.num_plants)
         for plant_pos in plant_positions:
+            # Randomly assign initial plant status
             is_thirsty = random.random() < self.thirsty_plant_prob
             self.plants[plant_pos] = is_thirsty
         available_positions -= set(plant_positions)
         
-        # Place rover in a random available position
+        # Randomly place rover
         self.rover_pos = random.choice(list(available_positions))
+    
+    def _carve_irregular_room(self, meta_x, meta_y):
+        """Carve out an irregularly shaped room at the given meta coordinates."""
+        base_x = meta_x * 6 + 1
+        base_y = meta_y * 6 + 1
+        
+        # Start with a basic 5x5 room
+        for i in range(5):
+            for j in range(5):
+                pos_x = base_x + i
+                pos_y = base_y + j
+                if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                    self.obstacles.discard((pos_x, pos_y))
+        
+        # Add irregular extensions (30% chance for each direction)
+        if random.random() < 0.3:  # Extend right
+            for i in range(2):
+                for j in range(2, 4):
+                    pos_x = base_x + 5 + i
+                    pos_y = base_y + j
+                    if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                        self.obstacles.discard((pos_x, pos_y))
+        
+        if random.random() < 0.3:  # Extend down
+            for i in range(2, 4):
+                for j in range(2):
+                    pos_x = base_x + i
+                    pos_y = base_y + 5 + j
+                    if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                        self.obstacles.discard((pos_x, pos_y))
+        
+        # Add diagonal cuts to corners (40% chance)
+        if random.random() < 0.4:
+            corners = [(0, 0), (4, 0), (0, 4), (4, 4)]
+            corner = random.choice(corners)
+            pos_x = base_x + corner[0]
+            pos_y = base_y + corner[1]
+            if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                self.obstacles.add((pos_x, pos_y))
+    
+    def _carve_irregular_path(self, cx, cy, nx, ny, dx, dy):
+        """Carve an irregular path between two meta-grid cells."""
+        # For diagonal connections, create a stepped path
+        if abs(dx) == 1 and abs(dy) == 1:  # Diagonal connection
+            # Create L-shaped or curved path
+            mid_x = cx if random.random() < 0.5 else nx
+            mid_y = cy if mid_x == cx else ny
+            
+            # Carve first segment
+            self._carve_straight_path(cx, cy, mid_x, mid_y)
+            # Carve second segment
+            self._carve_straight_path(mid_x, mid_y, nx, ny)
+        else:
+            # Straight connection but with some irregularity
+            self._carve_straight_path(cx, cy, nx, ny)
+            
+            # Add some random bulges to the path (20% chance)
+            if random.random() < 0.2:
+                self._add_path_bulge(cx, cy, nx, ny, dx, dy)
+    
+    def _carve_straight_path(self, cx, cy, nx, ny, width=5):
+        """Carve a straight path between two meta-grid cells."""
+        if cx == nx:  # Vertical connection
+            min_y, max_y = min(cy, ny), max(cy, ny)
+            for meta_y in range(min_y, max_y + 1):
+                for i in range(width):
+                    for j in range(6):
+                        pos_x = cx * 6 + 1 + i
+                        pos_y = meta_y * 6 + 1 + j
+                        if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                            self.obstacles.discard((pos_x, pos_y))
+        else:  # Horizontal connection
+            min_x, max_x = min(cx, nx), max(cx, nx)
+            for meta_x in range(min_x, max_x + 1):
+                for i in range(6):
+                    for j in range(width):
+                        pos_x = meta_x * 6 + 1 + i
+                        pos_y = cy * 6 + 1 + j
+                        if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                            self.obstacles.discard((pos_x, pos_y))
+    
+    def _add_path_bulge(self, cx, cy, nx, ny, dx, dy):
+        """Add a random bulge to a path for irregularity."""
+        mid_x = (cx + nx) // 2
+        mid_y = (cy + ny) // 2
+        
+        # Add a small 2x2 bulge perpendicular to the path direction
+        if dx == 0:  # Vertical path, bulge horizontally
+            bulge_dir = random.choice([-1, 1])
+            for i in range(2):
+                for j in range(2):
+                    pos_x = mid_x * 6 + 2 + bulge_dir * 2 + i
+                    pos_y = mid_y * 6 + 2 + j
+                    if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                        self.obstacles.discard((pos_x, pos_y))
+        else:  # Horizontal path, bulge vertically
+            bulge_dir = random.choice([-1, 1])
+            for i in range(2):
+                for j in range(2):
+                    pos_x = mid_x * 6 + 2 + i
+                    pos_y = mid_y * 6 + 2 + bulge_dir * 2 + j
+                    if 0 <= pos_x < self.grid_size and 0 <= pos_y < self.grid_size:
+                        self.obstacles.discard((pos_x, pos_y))
+    
+    def _add_diagonal_walls(self):
+        """Add some diagonal wall patterns throughout the maze."""
+        num_diagonals = random.randint(3, 8)
+        
+        for _ in range(num_diagonals):
+            # Pick a random starting point that's currently an obstacle
+            obstacle_list = list(self.obstacles)
+            if not obstacle_list:
+                continue
+                
+            start_x, start_y = random.choice(obstacle_list)
+            
+            # Create a short diagonal line (3-6 cells)
+            length = random.randint(3, 6)
+            direction = random.choice([(1, 1), (1, -1), (-1, 1), (-1, -1)])
+            
+            for i in range(length):
+                wall_x = start_x + i * direction[0]
+                wall_y = start_y + i * direction[1]
+                
+                if (0 <= wall_x < self.grid_size and 0 <= wall_y < self.grid_size):
+                    # Only add if it doesn't block essential paths
+                    self.obstacles.add((wall_x, wall_y))
+
 
     def render(self):
         """Render the environment based on the render_mode."""

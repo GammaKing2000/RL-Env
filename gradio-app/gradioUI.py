@@ -105,14 +105,16 @@ def run_simulation_live(model_path, model_type, grid_size, num_plants, num_obsta
                 }
                 update_queue.put(update_data)
             
-            summary = (f"Step: {step + 1}/{max_steps_per_episode}\nReward: {episode_reward:.2f}\n"
-                       f"Exploration: {info['exploration_percentage']:.1f}%\nThirsty Plants: {info['thirsty_plants']}")
+            summary = (f"Step: {step + 1}/{max_steps_per_episode} | Reward: {episode_reward:.2f}\n"
+                       f"Exploration: {info['exploration_percentage']:.1f}% | Thirsty Plants: {info['thirsty_plants']}\n"
+                       f"Rover Position: {info['rover_position']} | Collisions: {info['total_collisions']}\n"
+                       f"Explored Cells: {info['explored_cells']}/{info['total_cells']}")
             
             yield frame_2d, episode_reward, info['exploration_percentage'], info['thirsty_plants'], summary
             
             # If the agent is watering, pause the simulation to match the animation duration
             if info.get('is_watering', False):
-                time.sleep(3)
+                time.sleep(1)
 
             if terminated or truncated:
                 print("\nEpisode finished.")
@@ -135,7 +137,15 @@ with gr.Blocks() as demo:
             model_type = gr.Dropdown(label="Model Type", choices=['DQN', 'PPO', 'A2C'], value='PPO')
             model_path = gr.Textbox(label="Model Path", placeholder="e.g., train_improved/models/dqn_improved_final.zip")
             
-            map_generation_algo_dropdown = gr.Dropdown(label="Map Generation Algorithm", choices=['original', 'maze', 'rooms', 'border'], value='original')
+            map_generation_algo_dropdown = gr.Dropdown(
+                label="Environment Type", 
+                choices=[
+                    'original', 
+                    'maze'
+                ], 
+                value='original',
+                info="original: Open space with scattered obstacles | maze: Wide corridors with irregular walls"
+            )
             grid_size_slider = gr.Slider(minimum=10, maximum=50, value=25, step=1, label="Grid Size")
             num_plants_slider = gr.Slider(minimum=1, maximum=100, value=10, step=1, label="Number of Plants")
             num_obstacles_slider = gr.Slider(minimum=0, maximum=200, value=20, step=1, label="Number of Obstacles")
@@ -152,7 +162,7 @@ with gr.Blocks() as demo:
         exploration_output = gr.Number(label="Exploration %")
         plants_output = gr.Number(label="Thirsty Plants")
         
-    status_output = gr.Textbox(label="Live Episode Stats", lines=4, interactive=False)
+    status_output = gr.Textbox(label="Live Episode Stats", lines=6, interactive=False)
     
     run_event = run_btn.click(
         fn=run_simulation_live,
