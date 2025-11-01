@@ -86,24 +86,34 @@ class PlantOSEnvNew(gym.Env):
         )
         
         # Rewards for A2C - avg_exploration ~ 87%, 10mil steps, with curriculum learning, 512 n_env, 20 minutes
-        self.R_GOAL = 200                   # watering plants
-        self.R_MISTAKE = -20                # watering hydrated plant
-        self.R_INVALID = -11                # invalid move (collision or out of bounds)
-        self.R_WATER_EMPTY = -20            # watering empty space
-        self.R_STEP = -0.1                  # small step penalty to encourage efficiency
-        self.R_EXPLORATION = 10             # Bonus for exploring new cell
-        self.R_REVISIT = -3                 # Small penalty for revisiting explored cell
-        self.R_COMPLETE_EXPLORATION = 100   # Bonus for fully exploring the map
+        # self.R_GOAL = 200                   # watering plants
+        # self.R_MISTAKE = -20                # watering hydrated plant
+        # self.R_INVALID = -11                # invalid move (collision or out of bounds)
+        # self.R_WATER_EMPTY = -20            # watering empty space
+        # self.R_STEP = -0.1                  # small step penalty to encourage efficiency
+        # self.R_EXPLORATION = 10             # Bonus for exploring new cell
+        # self.R_REVISIT = -3                 # Small penalty for revisiting explored cell
+        # self.R_COMPLETE_EXPLORATION = 100   # Bonus for fully exploring the map
 
         # Rewards for DQN - avg_exploration ~ 97%, 10mil steps, with curriculum learning, 512 n_env, 9 minutes
-        # self.R_GOAL = 20
-        # self.R_MISTAKE = -10
-        # self.R_INVALID = -5
+        self.R_GOAL = 20
+        self.R_MISTAKE = -10
+        self.R_INVALID = -5
+        self.R_WATER_EMPTY = -5
+        self.R_STEP = -0.1
+        self.R_EXPLORATION = 10
+        self.R_REVISIT = -1
+        self.R_COMPLETE_EXPLORATION = 50
+
+        # Rewards for RecurrentPPO - avg_exploration ~ 84%, 3mil steps, with curriculum learning, 128 n_env, 120 minutes, plants are watered but only when encountered, gets stuck towrds the end when near obstacles
+        # self.R_GOAL = 50
+        # self.R_MISTAKE = -5
+        # self.R_INVALID = -2
         # self.R_WATER_EMPTY = -5
-        # self.R_STEP = -0.1
-        # self.R_EXPLORATION = 10
-        # self.R_REVISIT = -1
-        # self.R_COMPLETE_EXPLORATION = 50
+        # self.R_STEP = -0.05
+        # self.R_EXPLORATION = 5
+        # self.R_REVISIT = -0.5
+        # self.R_COMPLETE_EXPLORATION = 200
         
         # Internal state variables
         self.rover_pos = None
@@ -448,7 +458,7 @@ class PlantOSEnvNew(gym.Env):
             
             # Get unvisited neighbors (including diagonal)
             neighbors = []
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]: # Only cardinal directions
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < meta_w and 0 <= ny < meta_h and not visited[nx, ny]:
                     neighbors.append((nx, ny, dx, dy))
@@ -467,9 +477,6 @@ class PlantOSEnvNew(gym.Env):
                 stack.append((nx, ny))
             else:
                 stack.pop()
-        
-        # Add some random diagonal walls for extra irregularity
-        self._add_diagonal_walls()
         
         # Randomly place plants
         available_positions = set((x, y) for x in range(self.grid_size) for y in range(self.grid_size)) - self.obstacles
