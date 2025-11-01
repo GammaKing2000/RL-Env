@@ -59,12 +59,12 @@ def run_simulation_live(model_path, model_type, grid_size, num_plants, num_obsta
         elif model_type_lower == 'a2c': model = A2C.load(model_path); use_lstm = False
         else: raise ValueError(f"Unknown model type: {model_type}")
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f" Error loading model: {e}")
         dummy_frame = np.zeros((300, 300, 3), dtype=np.uint8)
         yield dummy_frame, 0, 0, 0, f"Error: {e}"
         return
 
-    print(f"✅ Model loaded successfully ({model_type.upper()})")
+    print(f" Model loaded successfully ({model_type.upper()})")
     
     try:
         obs, info = env.reset()
@@ -125,7 +125,7 @@ def run_simulation_live(model_path, model_type, grid_size, num_plants, num_obsta
     finally:
         env.close()
         cleanup_viewer_process()
-        print("✅ Simulation finished and resources cleaned up.")
+        print(" Simulation finished and resources cleaned up.")
 
 # --- Gradio UI ---
 with gr.Blocks() as demo:

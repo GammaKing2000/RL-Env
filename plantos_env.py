@@ -401,31 +401,31 @@ class PlantOSEnv(gym.Env):
             assets_dir = os.path.dirname(os.path.abspath(__file__))
             
             try:
-                self.background_img = pygame.image.load(os.path.join(assets_dir, 'grass_texture.png'))
+                self.background_img = pygame.image.load(os.path.join(assets_dir, 'assets/grass_texture.png'))
                 self.background_img = pygame.transform.scale(self.background_img, (self.cell_size, self.cell_size))
             except:
                 self.background_img = None
             
             try:
-                self.obstacle_img = pygame.image.load(os.path.join(assets_dir, 'obstacles_texture.png'))
+                self.obstacle_img = pygame.image.load(os.path.join(assets_dir, 'assets/obstacles_texture.png'))
                 self.obstacle_img = pygame.transform.scale(self.obstacle_img, (self.cell_size, self.cell_size))
             except:
                 self.obstacle_img = None
             
             try:
-                self.rover_img = pygame.image.load(os.path.join(assets_dir, 'mech_drone_agent.png'))
+                self.rover_img = pygame.image.load(os.path.join(assets_dir, 'assets/mech_drone_agent.png'))
                 self.rover_img = pygame.transform.scale(self.rover_img, (self.cell_size, self.cell_size))
             except:
                 self.rover_img = None
             
             try:
-                self.plant_thirsty_img = pygame.image.load(os.path.join(assets_dir, 'dry_plant_bg.png'))
+                self.plant_thirsty_img = pygame.image.load(os.path.join(assets_dir, 'assets/dry_plant_bg.png'))
                 self.plant_thirsty_img = pygame.transform.scale(self.plant_thirsty_img, (self.cell_size, self.cell_size))
             except:
                 self.plant_thirsty_img = None
             
             try:
-                self.plant_hydrated_img = pygame.image.load(os.path.join(assets_dir, 'good_plant_bg.png'))
+                self.plant_hydrated_img = pygame.image.load(os.path.join(assets_dir, 'assets/good_plant_bg.png'))
                 self.plant_hydrated_img = pygame.transform.scale(self.plant_hydrated_img, (self.cell_size, self.cell_size))
             except:
                 self.plant_hydrated_img = None
