@@ -143,8 +143,9 @@ class PlantOS3DViewer:
         self.rover_entity.animate('rotation_y', self.rover_entity.rotation_y + 360 * 3, duration=1, curve=curve.linear)
 
         Sequence(
-            Wait(3),
+            Wait(1.1), # Wait for slightly longer than the animation duration
             Func(lambda: setattr(self.rover_entity, 'texture', self.rover_texture_default)),
+            Func(lambda: setattr(self.rover_entity, 'rotation', Vec3(0, 0, 0))), # Reset rotation to 0 degrees
         ).start()
 
     def reset_scene(self):

@@ -127,7 +127,7 @@ def run_simulation_live(model_path, model_type, grid_size, num_plants, num_obsta
 
 # --- Gradio UI ---
 with gr.Blocks() as demo:
-    gr.Markdown("# PlantOS Agent Demo - 2D & 3D Live View")
+    gr.Markdown("# GROW-R - 2D & 3D Live View")
     gr.Markdown("Select a model and path, then click Run. The 2D view will appear below, and a 3D view will open in a new window.")
     
     with gr.Row():
