@@ -22,31 +22,10 @@ class PlantOSEnvNew(gym.Env):
     ENTITY_PLANT_HYDRATED = 2
     ENTITY_PLANT_THIRSTY = 3
     
-    """
-    PlantOS Environment: A 2D grid-based plant-watering rover simulation.
-    Modified to be similar to Mars Explorer with LIDAR sensing and 21x21 grid.
-    
-    The environment simulates a rover that must water thirsty plants in a grid world
-    while avoiding obstacles. It features procedural content generation for random
-    maps each episode and multi-channel observations suitable for CNN-based agents.
-    """
-    
     def __init__(self, grid_size: int = 21, num_plants: int = 8, num_obstacles: int = 50, 
                  lidar_range: int = 2, lidar_channels: int = 10, thirsty_plant_prob: float = 0.7,
                  observation_mode: str = "grid", render_mode: Optional[str] = None,
                  map_generation_algo: str = 'original'):
-        """
-        Initialize the PlantOS environment.
-        
-        Args:
-            grid_size: Size of the grid (grid_size x grid_size)
-            num_plants: Number of plants to place on the grid
-            num_obstacles: Number of obstacles to place on the grid
-            lidar_range: Range of LIDAR sensor in grid cells
-            lidar_channels: Number of LIDAR channels for sensing
-            thirsty_plant_prob: Probability of a plant being thirsty at reset
-            map_generation_algo: Algorithm for map generation ('original', 'maze')
-        """
         super().__init__()
         
         # Environment parameters

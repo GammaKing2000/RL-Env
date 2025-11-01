@@ -32,9 +32,7 @@ os.makedirs(models_dir, exist_ok=True)
 os.makedirs(videos_dir, exist_ok=True)
 
 
-# ============================================================================
-# Curriculum Wrapper (Optional - can be disabled for faster training)
-# ============================================================================
+
 
 class CurriculumWrapper(gym.Wrapper):
     """
@@ -48,7 +46,7 @@ class CurriculumWrapper(gym.Wrapper):
         self.current_maze_seed = None
         self.persistent_visit_counts = None
         
-        # PROGRESSIVE CURRICULUM PARAMETERS
+
         self.exploration_threshold = initial_threshold
         self.max_threshold = max_threshold
         self.threshold_increment = threshold_increment
@@ -60,10 +58,10 @@ class CurriculumWrapper(gym.Wrapper):
         self.episode_count += 1
         self.episodes_on_current_maze += 1
         
-        # Remove 'seed' from kwargs to avoid duplicate argument
+
         kwargs.pop('seed', None)
         
-        # Check if we should move to a new maze
+
         timeout = self.episodes_on_current_maze >= self.max_episodes_per_maze
         
         if self.maze_completed or timeout:
@@ -77,18 +75,18 @@ class CurriculumWrapper(gym.Wrapper):
             self.maze_completed = False
             self.episodes_on_current_maze = 0
             
-            # Generate new maze
+
             self.current_maze_seed = np.random.randint(0, 10000)
             obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
             self.persistent_visit_counts = None
         else:
-            # Keep the same maze
+
             if self.current_maze_seed is None:
                 self.current_maze_seed = np.random.randint(0, 10000)
             
             obs, info = self.env.reset(seed=self.current_maze_seed, **kwargs)
             
-            # Restore visit counts
+
             if self.persistent_visit_counts is not None:
                 self.env.visit_counts = self.persistent_visit_counts.copy()
             else:
@@ -99,40 +97,36 @@ class CurriculumWrapper(gym.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         
-        # Check if exploration reached CURRENT threshold
+
         if info['exploration_percentage'] >= self.exploration_threshold:
             self.maze_completed = True
             terminated = True
         
-        # Save visit counts at every step
+
         if self.persistent_visit_counts is not None:
             self.persistent_visit_counts = self.env.visit_counts.copy()
             
         return obs, reward, terminated, truncated, info
 
 
-# ============================================================================
-# Environment Factory
-# ============================================================================
+
 
 def make_env_wrapper(env_kwargs, rank=0, use_curriculum=True):
     """Helper function to create environment factory for vectorized training."""
     def _init():
         env = PlantOSEnv(**env_kwargs)
         
-        # Optional: Add curriculum wrapper
+
         if use_curriculum:
             env = CurriculumWrapper(env, initial_threshold=40.0, max_threshold=100.0)
         
-        # Monitor each env with separate log file
+
         env = Monitor(env, os.path.join(log_dir, f"env_{rank}"))
         return env
     return _init
 
 
-# ============================================================================
-# Custom Callbacks
-# ============================================================================
+
 
 class SaveOnIntervalCallback(BaseCallback):
     """Callback to save model at specific intervals."""
@@ -163,11 +157,11 @@ class EvaluationCallback(BaseCallback):
     
     def _on_step(self) -> bool:
         if self.n_calls % self.eval_freq == 0:
-            # Get info from the last episode
+
             if len(self.model.ep_info_buffer) > 0:
                 recent_episodes = list(self.model.ep_info_buffer)[-10:]
                 
-                # Extract exploration percentages if available
+
                 explorations = []
                 for ep_info in recent_episodes:
                     if 'exploration_percentage' in ep_info:
@@ -179,7 +173,7 @@ class EvaluationCallback(BaseCallback):
                     mean_exploration = np.mean(explorations)
                     self.exploration_history.append(mean_exploration)
                     
-                    # Log to file
+
                     with open(f"{self.log_dir}training_log.txt", "a") as f:
                         f.write(f"[Step {self.n_calls}] Mean Exploration: {mean_exploration:.2f}%\n")
                         f.write(f"Mazes completed: {self.maze_completion_count}\n")
@@ -190,9 +184,7 @@ class EvaluationCallback(BaseCallback):
         return True
 
 
-# ============================================================================
-# A2C Training Function
-# ============================================================================
+
 
 def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100k
     """
@@ -210,7 +202,7 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
         total_timesteps: Total training steps
     """
     
-    # Environment parameters
+
     env_kwargs = {
         'grid_size': 25,
         'num_plants': 10,
@@ -219,14 +211,13 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
         'lidar_channels': 16
     }
     
-    # Create VECTORIZED environment with N parallel instances
+
     print(f"Creating {n_envs} parallel environments...")
     env_fns = [make_env_wrapper(env_kwargs, rank=i, use_curriculum=use_curriculum) 
                for i in range(n_envs)]
     env = DummyVecEnv(env_fns)
     
-    # Optional: Normalize observations and rewards for better training
-    # env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.)
+
     
     print("=" * 60)
     print(f"Training with A2C (Advantage Actor-Critic)")
@@ -234,7 +225,7 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
     print(f"Curriculum Learning: {'ENABLED' if use_curriculum else 'DISABLED'}")
     print("=" * 60)
     
-    # Create A2C model with optimized hyperparameters
+
     model = A2C(
         "MlpPolicy",
         env,
@@ -255,7 +246,7 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
         )
     )
     
-    # Define callbacks
+
     save_interval = total_timesteps // 10  # Save 10 times during training
     checkpoint_callback = SaveOnIntervalCallback(
         save_interval=save_interval,
@@ -264,7 +255,7 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
     
     eval_callback = EvaluationCallback(log_dir, eval_freq=10000)
     
-    # Train the model
+
     print("\nStarting training...")
     print(f"Total timesteps: {total_timesteps:,}")
     print(f"Checkpoints every: {save_interval:,} steps")
@@ -275,12 +266,12 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
         progress_bar=True
     )
     
-    # Save final model
+
     final_model_path = f"{models_dir}a2c_final"
     model.save(final_model_path)
-    print(f"\n✅ Training complete! Final model saved to: {final_model_path}")
+    print(f"\n Training complete! Final model saved to: {final_model_path}")
     
-    # Evaluate the trained model
+
     print("\n" + "=" * 60)
     print("Evaluating trained model...")
     print("=" * 60)
@@ -293,41 +284,39 @@ def train_with_a2c(n_envs=8, use_curriculum=False, total_timesteps=100000): #100
     )
     print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
     
-    # Plot learning curve
+
     plot_learning_curve(log_dir, "A2C Learning Curve")
     
-    # Close environment
+
     env.close()
     
     return model
 
 
-# ============================================================================
-# Plotting and Visualization
-# ============================================================================
+
 
 def plot_learning_curve(log_dir, title="Learning Curve"):
     """Plot the learning curve from training logs."""
     try:
-        # Load results
+
         results = load_results(log_dir)
         
         if len(results) == 0:
             print("No results to plot yet.")
             return
         
-        # Sort by timesteps
+
         results = results.sort_values('t')
         
         x, y = ts2xy(results, 'timesteps')
         
-        # Create figure with two subplots
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
         
-        # Plot rewards
+
         ax1.plot(x, y, alpha=0.3, color='blue', label='Raw Reward')
         
-        # Plot smoothed rewards
+
         if len(y) > 100:
             window = min(100, len(y) // 10)
             y_smoothed = np.convolve(y, np.ones(window)/window, mode='valid')
@@ -340,7 +329,7 @@ def plot_learning_curve(log_dir, title="Learning Curve"):
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
-        # Plot episode lengths
+
         x_len, y_len = ts2xy(results, 'timesteps')
         ax2.plot(x_len, results['l'].values, alpha=0.3, color='green')
         
@@ -364,14 +353,12 @@ def plot_learning_curve(log_dir, title="Learning Curve"):
         print(f"Error plotting learning curve: {e}")
 
 
-# ============================================================================
-# Testing Function
-# ============================================================================
+
 
 def test_a2c_model(model_path, num_episodes=5):
     """Test a trained A2C model and visualize its performance."""
     
-    # Create environment MATCHING THE TRAINING PARAMETERS
+
     env = PlantOSEnv(
         grid_size=25,
         num_plants=10,
@@ -381,15 +368,15 @@ def test_a2c_model(model_path, num_episodes=5):
         render_mode='2d'
     )
     
-    # Load model
+
     try:
         model = A2C.load(model_path)
-        print(f"✅ Loaded A2C model from: {model_path}")
+        print(f"Loaded A2C model from: {model_path}")
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"Error loading model: {e}")
         return
     
-    # Run episodes
+
     for episode in range(num_episodes):
         obs, info = env.reset()
         done = False
@@ -401,27 +388,27 @@ def test_a2c_model(model_path, num_episodes=5):
         print(f"{'='*60}")
         
         while not done:
-            # Get action from model (deterministic for testing)
+
             action, _ = model.predict(obs, deterministic=True)
             
-            # Take action
+
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             
             total_reward += reward
             steps += 1
             
-            # Render
+
             env.render('2d')
             time.sleep(0.01)
             
-            # Print progress every 100 steps
+
             if steps % 100 == 0:
                 print(f"  Step {steps}: Exploration {info['exploration_percentage']:.1f}%, "
                       f"Reward: {total_reward:.1f}")
         
-        # Episode summary
-        print(f"\n✅ Episode {episode + 1} Complete")
+
+        print(f"\n Episode {episode + 1} Complete")
         print(f"   Steps: {steps}")
         print(f"   Total Reward: {total_reward:.2f}")
         print(f"   Exploration: {info['exploration_percentage']:.2f}%")
@@ -431,9 +418,7 @@ def test_a2c_model(model_path, num_episodes=5):
     env.close()
 
 
-# ============================================================================
-# Main Execution
-# ============================================================================
+
 
 if __name__ == "__main__":
     import argparse
@@ -465,7 +450,7 @@ if __name__ == "__main__":
             total_timesteps=args.timesteps
         )
         
-        # Ask if user wants to test
+
         test = input("\nTest the trained model? (y/n): ").strip().lower()
         if test == 'y':
             test_a2c_model(f"{models_dir}a2c_final", num_episodes=args.episodes)

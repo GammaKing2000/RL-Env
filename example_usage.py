@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Example usage of the PlantOS environment with 2D and 3D rendering.
-
-This script demonstrates how to create, use, and visualize the environment
-in both 2D (Pygame) and 3D (Ursina).
-"""
-
 import numpy as np
 from plantos_env import PlantOSEnv
 import time
@@ -22,10 +14,10 @@ def main(model_path: str, model_type: str = 'auto', max_steps_per_episode=1000):
         model_type: Type of model ('dqn', 'ppo', or 'auto' to detect from filename)
         max_steps_per_episode: Maximum steps per episode
     """
-    print("🌱 Starting PlantOS Environment with 2D and 3D Views")
+    print("Starting PlantOS Environment with 2D and 3D Views")
     print("=" * 60)
     
-    # Auto-detect model type from filename if not specified
+
     if model_type == 'auto':
         if 'dqn' in model_path.lower():
             model_type = 'dqn'
@@ -34,32 +26,32 @@ def main(model_path: str, model_type: str = 'auto', max_steps_per_episode=1000):
         elif 'a2c' in model_path.lower():
             model_type = 'a2c'
         else:
-            print("⚠️  Could not auto-detect model type from filename.")
+            print("  Could not auto-detect model type from filename.")
             print("Please specify --model-type dqn, ppo or a2c")
             return
     
-    # Create environment with Mars Explorer-like parameters
+
     env = PlantOSEnv(grid_size=25, num_plants=10, num_obstacles=20, lidar_range=6, lidar_channels=16, render_mode='human')
     
-    # Load the appropriate model
+
     if model_type == 'dqn':
-        print("📦 Loading DQN model...")
+        print(" Loading DQN model...")
         model = DQN.load(model_path)
         use_lstm = False
     elif model_type == 'ppo':
-        print("📦 Loading RecurrentPPO model...")
+        print(" Loading RecurrentPPO model...")
         model = RecurrentPPO.load(model_path)
         use_lstm = True
     elif model_type == 'a2c':
-        print("📦 Loading A2C model...")
+        print(" Loading A2C model...")
         model = A2C.load(model_path)
         use_lstm = False
     else:
-        print(f"❌ Unknown model type: {model_type}")
+        print(f" Unknown model type: {model_type}")
         print("Valid options: 'dqn', 'ppo', 'a2c', or 'auto'")
         return
     
-    print(f"✅ Model loaded successfully ({model_type.upper()})")
+    print(f" Model loaded successfully ({model_type.upper()})")
     
     total_rewards = []
     
@@ -70,18 +62,18 @@ def main(model_path: str, model_type: str = 'auto', max_steps_per_episode=1000):
             print(f"\n📺 Episode {episode}")
             print("-" * 30)
             
-            # Reset environment
+
             obs, info = env.reset()
             episode_reward = 0
             
-            # For LSTM models, initialize hidden states
+
             if use_lstm:
                 lstm_states = None
                 episode_start = np.ones((1,), dtype=bool)
             
-            # Run episode
+
             for step in range(max_steps_per_episode):
-                # Take action from the trained model
+
                 if use_lstm:
                     action, lstm_states = model.predict(
                         obs, 
@@ -93,21 +85,21 @@ def main(model_path: str, model_type: str = 'auto', max_steps_per_episode=1000):
                 else:
                     action, _ = model.predict(obs, deterministic=True)
                 
-                # Execute step
+
                 obs, reward, terminated, truncated, info = env.step(action)
                 episode_reward += reward
                 
-                # Render both 2D and 3D views
+
                 env.render()
                 
-                # Check if episode is done
+
                 if terminated or truncated:
                     break
                 
-                # A small delay is good for visualization but not required
+
                 time.sleep(0.05)
             
-            # Episode summary
+
             print(f"\nEpisode {episode} finished after {step + 1} steps")
             print(f"Total episode reward: {episode_reward:.2f}")
             print(f"Exploration: {info['exploration_percentage']:.1f}%")
@@ -119,16 +111,16 @@ def main(model_path: str, model_type: str = 'auto', max_steps_per_episode=1000):
             time.sleep(2)
     
     except KeyboardInterrupt:
-        print("\n⚠️  Environment interrupted by user")
+        print("\n  Environment interrupted by user")
     
     finally:
-        # Clean up
+
         env.close()
         
-        # Print summary
+
         if total_rewards:
             print("\n" + "=" * 60)
-            print("📊 FINAL SUMMARY")
+            print(" FINAL SUMMARY")
             print("=" * 60)
             print(f"Episodes completed: {len(total_rewards)}")
             print(f"Average reward: {np.mean(total_rewards):.2f}")
